@@ -7,13 +7,13 @@
     {
       "id": "mix-pilot",
       "name": "Mix Pilot",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "author": "christopheb38",
       "summary": "Next-track suggestions: what mixes best after the playing track, by key, tempo, style and real DJ transitions.",
-      "icon": "https://github.com/christopheb38/mix-pilot/releases/download/mix-pilot-0.3.1/mix-pilot-0.3.1-icon.png",
-      "package": "https://github.com/christopheb38/mix-pilot/releases/download/mix-pilot-0.3.1/mix-pilot-0.3.1.azmod",
-      "sha256": "7d5e2496636571f1159b927b912f491d71fe04ae93f6622628a66ac088512b86",
-      "size": 147853,
+      "icon": "https://github.com/christopheb38/mix-pilot/releases/download/mix-pilot-0.3.2/mix-pilot-0.3.2-icon.png",
+      "package": "https://github.com/christopheb38/mix-pilot/releases/download/mix-pilot-0.3.2/mix-pilot-0.3.2.azmod",
+      "sha256": "648c81de7000e4ae6e9071299b4a075b88a6cc8b248184c14177d584bb512e6a",
+      "size": 147981,
       "firmware": [
         "any"
       ],
