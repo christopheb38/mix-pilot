@@ -10,6 +10,12 @@ A community mod for [AZ-MODS](https://github.com/Kyle-Hosman/xdj-az-mods).
 
 </div>
 
+<p align="center">
+  <img src="shots/1.png" width="32%" alt="The panel at the bottom of the SEARCH screen">
+  <img src="shots/2.png" width="32%" alt="The panel on the right of a playlist">
+  <img src="shots/3.png" width="32%" alt="The Mix Pilot page in the Mod Menu">
+</p>
+
 Mix Pilot watches what your decks are playing, finds the track in the rekordbox library on
 your USB stick, and shows the tracks that mix best after it, right on the BROWSE and SEARCH
 screens. It looks at key, tempo, style and the transitions DJs actually play, and it learns
