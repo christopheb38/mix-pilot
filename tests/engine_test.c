@@ -152,6 +152,24 @@ static void ranking(void)
     nt_lib_free(&L);
 }
 
+/* The energy tabs: Build up and Cool down must not show the same first track. */
+static void energy(void)
+{
+    nt_lib L;
+    CHECK(nt_lib_init(&L, 16) == 0);
+    int a = nt_lib_add(&L, 0, 1, "Now", "A", "", "Am", 124, 300);
+    int faster = nt_lib_add(&L, 0, 2, "Faster", "B", "", "Em", 127, 300);    /* 9A, natively faster */
+    int slower = nt_lib_add(&L, 0, 3, "Slower", "C", "", "Dm", 121, 300);    /* 7A, natively slower */
+    int same = nt_lib_add(&L, 0, 4, "Same", "D", "", "Am", 124, 300);
+    int out[NT_MAX_RESULTS];
+    nt_reason why[NT_MAX_RESULTS];
+    nt_ctx up = { NT_FLOW_UP, 0, NULL }, down = { NT_FLOW_DOWN, 0, NULL }, smooth = { NT_FLOW_SMOOTH, 0, NULL };
+    CHECK(nt_rank(&L, &up, a, 0, 3, out, why) == 3 && out[0] == faster);
+    CHECK(nt_rank(&L, &down, a, 0, 3, out, why) == 3 && out[0] == slower);
+    CHECK(nt_rank(&L, &smooth, a, 0, 3, out, why) == 3 && out[0] == same);
+    nt_lib_free(&L);
+}
+
 static void big(void)
 {
     nt_lib L;
@@ -212,6 +230,7 @@ int main(void)
     identity();
     pairmap();
     ranking();
+    energy();
     big();
     json();
     printf("%d checks, %d failed\n", checks, fails);

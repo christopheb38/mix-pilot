@@ -123,6 +123,7 @@ static void draw_text(az_draw *d, int x, int y, const char *s, int px, uint32_t 
 }
 static void fill_rect(az_draw *d, int x, int y, int w, int h, uint32_t c) { (void)d; (void)x; (void)y; (void)w; (void)h; (void)c; }
 static void draw_header(az_draw *d, const char *t) { (void)d; (void)t; }
+static void draw_rect(az_draw *d, int x, int y, int w, int h, int lw, uint32_t c) { (void)d; (void)x; (void)y; (void)w; (void)h; (void)lw; (void)c; }
 static uint32_t color(int r) { return (uint32_t)r * 0x111111u; }
 static int row_height(az_draw *d) { (void)d; return 60; }
 static int text_width(const char *s, int px) { return (int)strlen(s) * px / 2; }
@@ -191,7 +192,7 @@ int main(void)
     snprintf(dir, sizeof dir, "/tmp/mixpilot-sim-%d", (int)getpid());
     mkdir(dir, 0755);
     CORE = (az_core_v1){ .abi = AZ_MOD_ABI, .size = sizeof(az_core_v1), .log = logf_, .register_screen = register_screen,
-                         .draw_header = draw_header, .draw_text = draw_text, .fill_rect = fill_rect, .color = color,
+                         .draw_header = draw_header, .draw_text = draw_text, .fill_rect = fill_rect, .draw_rect = draw_rect, .color = color,
                          .row_height = row_height, .text_width = text_width, .request_redraw = request_redraw,
                          .deck_count = deck_count, .data_dir = data_dir, .assets_dir = no_assets,
                          .register_row = register_row, .cfg_get = cfg_get, .cfg_set = cfg_set, .row_value = row_value, .row_set = row_set,
@@ -204,7 +205,7 @@ int main(void)
     CHECK(nrows == 1 && row_screen != NULL);            /* one row in the Mod Menu, opening our page */
     run(1.0);
     dump("stick not readable yet");
-    CHECK(screen_has("No rekordbox library yet") && screen_has("USB1 -1/-1"));
+    CHECK(screen_has("The deck sees no USB stick") && screen_has("USB1 -1/-1"));   /* no /proc/mounts on a Mac */
     __atomic_store_n(&lib_ready, 1, __ATOMIC_RELEASE);  /* the stick becomes readable */
     run(2.5);
     dump("empty decks");
@@ -217,7 +218,8 @@ int main(void)
     printf("--- page\n");
     for (int i = 0; i < nscreen; i++) printf("  | %s\n", screen_text[i]);
     CHECK(screen_has("Energy") && screen_has("Smooth") && screen_has("Follow"));
-    CHECK(screen_has("@blinkevent38") && screen_has("Suivez-nous"));
+    CHECK(screen_has("@blinkevent38") && screen_has("@christopheb_38") && screen_has("Follow us"));
+    CHECK(screen_has("Language") && screen_has("English"));
 
     pthread_mutex_lock(&mu);
     D[0].loaded = 1; D[0].lib = 0; D[0].playing = 1;      /* Opening Groove, Am 122 */
@@ -230,6 +232,23 @@ int main(void)
     CHECK(!screen_has("Second Wind"));                     /* loaded on deck 2: never suggested */
     CHECK(!screen_has("Fast Lane"));                       /* 150 BPM */
     CHECK(screen_has("Deep House"));                       /* "in <playlist>" */
+    CHECK(screen_has("Smooth") && screen_has("Build up") && screen_has("Cool down"));   /* the tabs */
+    char smooth_first[200] = "", up_first[200] = "";
+    for (int i = 0; i < nscreen; i++)
+        if (!strcmp(screen_text[i], "1") && i + 1 < nscreen) { snprintf(smooth_first, sizeof smooth_first, "%s", screen_text[i + 1]); break; }
+    /* tap the middle tab (Build up): header 6+21, "After" line 21+4, then the 29 px tab bar */
+    int tapped = 0;
+    {
+        az_event t = { AZ_EV_TAP, 0, 800 + 235, 90 + 27 + 25 + 10 };
+        surf.on_input(&t, surf.user);
+        run(0.5);
+        paint();
+        for (int i = 0; i < nscreen; i++)
+            if (!strcmp(screen_text[i], "1") && i + 1 < nscreen) { snprintf(up_first, sizeof up_first, "%s", screen_text[i + 1]); break; }
+        tapped = strcmp(up_first, smooth_first) != 0 && !screen_has("CHAIN");
+    }
+    printf("  smooth #1: %s   build up #1: %s\n", smooth_first, up_first);
+    CHECK(tapped);                                         /* Build up shows another first track */
 
     /* deck 2 mixes in, deck 1 stops: Opening Groove -> Second Wind is learned */
     pthread_mutex_lock(&mu);
@@ -266,6 +285,19 @@ int main(void)
     run(2.0);
     dump("chain after Opening Groove (deck 2)");
     CHECK(screen_has("Plan after D2: Opening Groove"));
+
+    /* the page: turn to Language (item 9: suggestions, 8 settings), click -> Francais */
+    az_event knob = { AZ_EV_KNOB, 1, 0, 0 }, click = { AZ_EV_CLICK, 0, 0, 0 };
+    row_screen->on_enter(row_screen->user);
+    for (int i = 0; i < 9; i++) row_screen->on_input(&knob, row_screen->user);
+    row_screen->on_input(&click, row_screen->user);
+    run(1.0);
+    nscreen = 0;
+    row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+    CHECK(screen_has("Langue") && screen_has("Fran") && screen_has("Suivez-nous"));
+    paint();
+    dump("in French");
+    CHECK(screen_has("Plan apr") && screen_has("Stable") && screen_has("Monter"));
 
     printf("sim: %s\n", fails ? "FAILED" : "all checks passed");
     return fails != 0;

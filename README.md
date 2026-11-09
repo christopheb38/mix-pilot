@@ -9,7 +9,19 @@ rekordbox de tes clés USB, et affiche les morceaux qui s'enchaînent le mieux d
 - dans un **panneau** sur les écrans BROWSE et SEARCH (là où tu choisis le prochain morceau) ;
 - sur une **page** du Mod Menu (*Community Mods > Installed > Mix Pilot*).
 
-Deux modes (touche le panneau pour passer de l'un à l'autre) :
+En haut du panneau, trois **onglets d'énergie** (touche-en un pour le choisir ; sur la page plein
+écran, tourne la molette) :
+
+| Onglet | Ce qu'il privilégie |
+|---|---|
+| **Smooth** | rester au même niveau : même tempo, même tonalité |
+| **Build up** | faire monter : morceaux un peu plus rapides, tonalité qui monte (+1, +2 sur la roue) |
+| **Cool down** | faire redescendre : morceaux un peu plus lents, tonalité qui descend |
+
+Les trois listes sont calculées en même temps, donc changer d'onglet est instantané. L'énergie
+est estimée à partir du tempo et de la tonalité (rekordbox ne fournit pas de mesure d'énergie).
+
+Deux modes (touche le panneau en dehors des onglets pour passer de l'un à l'autre) :
 
 | Mode | Ce que tu vois |
 |---|---|
@@ -30,8 +42,7 @@ bon, jaune = correct, orange = possible, **bleu = enchaînement déjà joué**),
 | Enchaînements réels | 22 % | Ce que **toi** tu as enchaîné (appris sur le deck) + un fichier **communautaire** |
 | Similarité | 12 % | « Similar tracks » de Last.fm : les auditeurs de A écoutent aussi B |
 
-Réglage **Energy** : *Smooth*, *Build up* (favorise un tempo plus rapide et une clé qui monte) ou
-*Cool down* (l'inverse). Les morceaux chargés sur les autres decks et ceux déjà joués ce soir
+Les morceaux chargés sur les autres decks et ceux déjà joués ce soir
 ne sont jamais proposés.
 
 ### Les enchaînements « connus »
@@ -104,6 +115,19 @@ tempo, playlists, tes enchaînements, fichier communautaire). Les réponses de L
 en cache sur la clé (`lastfm-cache.tsv`), donc un morceau déjà vu reste enrichi hors ligne en
 soirée.
 
+## Si le panneau n'affiche pas de suggestions
+
+Le mod lit ta bibliothèque par le service d'AZ-MODS, qui ne lit que le fichier
+`PIONEER/rekordbox/exportLibrary.db` (format **Device Library Plus** de rekordbox 7) d'une clé
+branchée **directement** sur USB 1 ou USB 2. Le panneau dit ce qu'il a trouvé :
+
+| Message | Que faire |
+|---|---|
+| *No exportLibrary.db: export with Device Library Plus* | la clé n'a que l'ancien format `export.pdb` : réexporte-la depuis rekordbox 7 avec Device Library Plus |
+| *USB port not recognized: plug the stick straight in* | la clé passe par un hub ou un adaptateur : branche-la directement |
+| *The deck sees no USB stick* | aucune clé montée par le deck |
+| *Library refused by the deck (codes below)* | envoie-nous la ligne du bas (`USB1 -1/-1 ... sda1:db p1`) |
+
 ## Réglages
 
 Une seule ligne **Mix Pilot** dans le Mod Menu : elle ouvre la page du mod. Tourne la molette
@@ -115,11 +139,12 @@ pour choisir une ligne, clique (ou touche-la) pour changer sa valeur, BACK pour 
 | Panel | Right / Left / Off. Appui long sur le panneau : le replier |
 | Mode | Next tracks / Chain |
 | Tracks shown | 4, 5, 8, 10 |
-| Energy | Smooth / Build up / Cool down |
+| Energy | l'onglet affiché : Smooth / Build up / Cool down |
 | Follow | Auto (le dernier deck lancé, après 6 s de lecture) ou un deck fixe |
 | Avoid same artist | baisse un peu les autres morceaux du même artiste |
 | Learn my transitions | enregistre tes enchaînements |
 | Online (Last.fm) | coupe tout accès réseau |
+| Language | English, Français, Español, Deutsch |
 | Reload library | relit la clé, `config.txt` et les fichiers d'enchaînements |
 
 ## Développement
@@ -167,7 +192,7 @@ Last.fm (au plus ~5 requêtes/s, pause de 30 s si le réseau tombe).
 Vous aimez Mix Pilot ? Suivez-nous sur Instagram ! · Love Mix Pilot? Follow us on Instagram!
 
 [@blinkevent38](https://www.instagram.com/blinkevent38/) ·
-[@christopheb38](https://www.instagram.com/christopheb38/)
+[@christopheb_38](https://www.instagram.com/christopheb_38/)
 
 ## Licence
 

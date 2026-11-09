@@ -30,6 +30,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "azmod-mod.h"
 #include "engine.h"
@@ -55,33 +56,50 @@ static const az_core_v1 *C;
  * Kept on the mod's own page (one row in the Mod Menu opens it), saved with cfg_set. Read from
  * any thread as atomics; changed on the UI thread only. */
 
-enum { S_PANEL, S_MODE, S_COUNT, S_FLOW, S_REF, S_ARTIST, S_LEARN, S_ONLINE, S_N };
-static const char *const C_PANEL[] = { "Right", "Left", "Off" };
-static const char *const C_MODE[] = { "Next tracks", "Chain" };
-static const char *const C_COUNT[] = { "4", "5", "8", "10" };
-static const char *const C_FLOW[] = { "Smooth", "Build up", "Cool down" };
-static const char *const C_REF[] = { "Auto", "Deck 1", "Deck 2", "Deck 3", "Deck 4" };
-static const char *const C_ONOFF[] = { "Off", "On" };
+#include "i18n.h"
+
+enum { S_PANEL, S_MODE, S_COUNT, S_FLOW, S_REF, S_ARTIST, S_LEARN, S_ONLINE, S_LANG, S_N };
 static const struct {
-    const char *key, *label;
-    int def, n;
-    const char *const *choices;
+    const char *key;
+    int label, def, n;
 } SET[S_N] = {
-    { "panel", "Panel", 0, 3, C_PANEL },
-    { "mode", "Mode", 0, 2, C_MODE },
-    { "count", "Tracks shown", 1, 4, C_COUNT },
-    { "flow", "Energy", 0, 3, C_FLOW },
-    { "ref", "Follow", 0, 5, C_REF },
-    { "artist", "Avoid same artist", 1, 2, C_ONOFF },
-    { "learn", "Learn my transitions", 1, 2, C_ONOFF },
-    { "online", "Online (Last.fm)", 1, 2, C_ONOFF },
+    { "panel", T_PANEL, 0, 3 }, { "mode", T_MODE, 0, 2 },     { "count", T_COUNT, 1, 4 },
+    { "flow", T_FLOW, 0, 3 },   { "ref", T_REF, 0, 5 },       { "artist", T_ARTIST, 1, 2 },
+    { "learn", T_LEARN, 1, 2 }, { "online", T_ONLINE, 1, 2 }, { "lang", T_LANG, 0, LANG_N },
 };
 static atomic_int g_set[S_N];
 static const int COUNTS[] = { 4, 5, 8, 10 };
+static const int FLOW_T[3] = { T_SMOOTH, T_UP, T_DOWN };
 
 static int S(int i)
 {
     return atomic_load(&g_set[i]);
+}
+
+/* A text in the chosen language (English when a translation is missing). */
+static const char *tr(int id)
+{
+    int l = S(S_LANG);
+    if (l < 0 || l >= LANG_N) l = 0;
+    return TR[id][l] ? TR[id][l] : TR[id][0];
+}
+
+/* The label of value v of setting i, in the chosen language. */
+static void choice_text(int i, int v, char *buf, size_t n)
+{
+    static const int panel_t[] = { T_RIGHT, T_LEFT, T_HIDDEN };
+    switch (i) {
+    case S_PANEL: snprintf(buf, n, "%s", tr(panel_t[v % 3])); break;
+    case S_MODE: snprintf(buf, n, "%s", tr(v ? T_CHAIN : T_NEXT)); break;
+    case S_COUNT: snprintf(buf, n, "%d", COUNTS[v & 3]); break;
+    case S_FLOW: snprintf(buf, n, "%s", tr(FLOW_T[v % 3])); break;
+    case S_REF:
+        if (v == 0) snprintf(buf, n, "%s", tr(T_AUTO));
+        else snprintf(buf, n, tr(T_DECK), v);
+        break;
+    case S_LANG: snprintf(buf, n, "%s", LANG_NAMES[v % LANG_N]); break;
+    default: snprintf(buf, n, "%s", tr(v ? T_ON : T_OFF)); break;
+    }
 }
 
 static void load_settings(void)
@@ -126,10 +144,10 @@ typedef struct {
 
 static pthread_mutex_t g_view_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
-    int n, chain;
-    vrow r[NT_MAX_RESULTS];
+    int n[3], chain;                 /* one list per energy tab: Smooth, Build up, Cool down */
+    vrow r[3][NT_MAX_RESULTS];
     char head[160], status[128];
-} g_view = { 0, 0, { { "", "", "", "", "", 0, 0 } }, "Mix Pilot", "Reading the library..." };
+} g_view;
 static atomic_int view_fresh = 1;
 
 /* ---- the library: worker and net threads ----------------------------------------------- */
@@ -354,6 +372,68 @@ static int on_track_pl(const az_track *t, void *user)
 }
 
 static atomic_int g_rc[2][2];     /* per stick: lib_tracks(all) and lib_playlists results, for the screen */
+static pthread_mutex_t g_diag_mu = PTHREAD_MUTEX_INITIALIZER;
+static char g_diag[96];          /* what we found on the sticks when the core gave no library */
+static atomic_int g_diag_code;   /* 0 none, 1 no stick, 2 export.pdb only, 3 port not recognized, 4 refused */
+
+/* The USB port of a block device, by the same rule as the core (sdk_lib.c): 1, 2, or 0 unknown. */
+static int port_of_sysfs(const char *real)
+{
+    const char *h = real;
+    while ((h = strstr(h, "/host")) && !(h[5] >= '0' && h[5] <= '9')) h++;
+    if (!h) return 0;
+    const char *b = h, *a;
+    do b--;
+    while (b > real && *b != '/');
+    if (b <= real) return 0;
+    a = b;
+    do a--;
+    while (a > real && *a != '/');
+    if (*a != '/') return 0;
+    size_t n = (size_t)(b - a - 1);
+    char bus[16];
+    if (n == 0 || n >= sizeof bus) return 0;
+    memcpy(bus, a + 1, n);
+    bus[n] = 0;
+    if (!strcmp(bus, "1-1") || !strcmp(bus, "3-1")) return 1;
+    if (!strcmp(bus, "2-1") || !strcmp(bus, "4-1")) return 2;
+    return 0;
+}
+
+/* When the core reads no library: look at the sticks ourselves and say why, in plain words. */
+static void diagnose(void)
+{
+    char out[96] = "";
+    int code = 1, o = 0;
+    FILE *f = fopen("/proc/mounts", "re");
+    if (f) {
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            char dev[128], mp[400];
+            if (sscanf(line, "%127s %399s", dev, mp) != 2 || strncmp(dev, "/dev/", 5) != 0 ||
+                strncmp(mp, "/media/usb", 10) != 0)
+                continue;
+            char p[600], sys[300], real[600];
+            snprintf(p, sizeof p, "%s/PIONEER/rekordbox/exportLibrary.db", mp);
+            int db = access(p, R_OK) == 0;
+            snprintf(p, sizeof p, "%s/PIONEER/rekordbox/export.pdb", mp);
+            int pdb = access(p, R_OK) == 0;
+            snprintf(sys, sizeof sys, "/sys/class/block/%s", dev + 5);
+            int port = realpath(sys, real) ? port_of_sysfs(real) : 0;
+            int c = db ? (port ? 4 : 3) : pdb ? 2 : 1;
+            if (c > code || code == 1) code = c > code ? c : code;
+            if (o < (int)sizeof out - 1)
+                o += snprintf(out + o, sizeof out - (size_t)o, "%s%s:%s%s p%d", o ? " " : "", dev + 5,
+                              db ? "db" : "", pdb ? (db ? "+pdb" : "pdb") : (db ? "" : "-"), port);
+        }
+        fclose(f);
+    }
+    pthread_mutex_lock(&g_diag_mu);
+    snprintf(g_diag, sizeof g_diag, "%s", out);
+    pthread_mutex_unlock(&g_diag_mu);
+    atomic_store(&g_diag_code, code);
+    C->log(MOD_ID, "sticks: %s (code %d)", out[0] ? out : "none under /media/usb", code);
+}
 
 static int build_library(nt_lib *L)
 {
@@ -379,6 +459,7 @@ static int build_library(nt_lib *L)
         plbase += pls->n;
     }
     free(pls);
+    if (!L->n) diagnose();
     const char *dir = data_dir(), *assets = assets_dir();
     char p[512];
     if (assets) {
@@ -445,20 +526,46 @@ static void queue_job(uint32_t ident, const char *artist, const char *title, int
 
 static void status_line(char *s, size_t n, const nt_lib *L)
 {
-    const char *net = "";
-    switch (atomic_load(&net_state)) {
-    case 1: net = "  -  Last.fm: add a key in config.txt"; break;
-    case 2: net = "  -  offline"; break;
-    case 3: net = "  -  Last.fm on"; break;
-    case 4: net = "  -  Last.fm unreachable"; break;
-    default: break;
+    int ns = atomic_load(&net_state);
+    const char *net = ns == 1 ? tr(T_NET_KEY) : ns == 2 ? tr(T_NET_OFFLINE) : ns == 3 ? tr(T_NET_ON)
+                    : ns == 4 ? tr(T_NET_FAIL) : "";
+    if (!S(S_ONLINE)) net = tr(T_NET_DISABLED);
+    if (!L->n) {                                          /* what the core answered, and what we saw */
+        char diag[96];
+        pthread_mutex_lock(&g_diag_mu);
+        snprintf(diag, sizeof diag, "%s", g_diag);
+        pthread_mutex_unlock(&g_diag_mu);
+        snprintf(s, n, "USB1 %d/%d  USB2 %d/%d  %s", atomic_load(&g_rc[0][0]), atomic_load(&g_rc[0][1]),
+                 atomic_load(&g_rc[1][0]), atomic_load(&g_rc[1][1]), diag);
+        return;
     }
-    if (!S(S_ONLINE)) net = "  -  online off";
-    if (!L->n)                                            /* what the core answered, to report */
-        snprintf(s, n, "USB1 %d/%d  USB2 %d/%d", atomic_load(&g_rc[0][0]), atomic_load(&g_rc[0][1]),
-                 atomic_load(&g_rc[1][0]), atomic_load(&g_rc[1][1]));
-    else
-        snprintf(s, n, "%d tracks  -  %u transitions known%s", L->n, L->pairs.n, net);
+    char a[48], b[64];
+    snprintf(a, sizeof a, tr(T_TRACKS), L->n);
+    snprintf(b, sizeof b, tr(T_KNOWN), L->pairs.n);
+    snprintf(s, n, "%s  -  %s%s%s", a, b, net[0] ? "  -  " : "", net);
+}
+
+/* One line of reasons, in the chosen language: "8A>9A  -0.8%  house  mixed 3x". */
+static void reason_text(const nt_lib *L, const nt_reason *r, int from, int to, char *buf, size_t n)
+{
+    char ka[4], kb[4], part[64];
+    size_t o = 0;
+    buf[0] = '\0';
+    nt_camelot_str(L->t[from].camelot, ka);
+    nt_camelot_str(L->t[to].camelot, kb);
+    if (ka[0] && kb[0]) o += (size_t)snprintf(buf + o, n - o, "%s>%s", ka, kb);
+    else if (kb[0]) o += (size_t)snprintf(buf + o, n - o, "%s", kb);
+    if (o < n && L->t[to].bpm > 0)
+        o += (size_t)snprintf(buf + o, n - o, "%s%+.1f%%%s", o ? "  " : "", r->pct, r->halfdouble ? " x2" : "");
+    if (o < n && r->shared_tag >= 0 && r->shared_tag < L->ntags)
+        o += (size_t)snprintf(buf + o, n - o, "  %s", L->tags[r->shared_tag]);
+    if (o < n && r->pair_count > 0) {
+        snprintf(part, sizeof part, tr(T_MIXED), r->pair_count);
+        o += (size_t)snprintf(buf + o, n - o, "  %s", part);
+    } else if (o < n && r->sim >= 0.15f) {
+        snprintf(part, sizeof part, tr(T_SIMILAR), (int)(r->sim * 100 + 0.5f));
+        o += (size_t)snprintf(buf + o, n - o, "  %s", part);
+    }
 }
 
 static void compute(void)
@@ -476,53 +583,57 @@ static void compute(void)
 
     int chain = S(S_MODE) == 1;
     int k = COUNTS[S(S_COUNT) & 3];
-    nt_ctx ctx = { S(S_FLOW), S(S_ARTIST), NULL };
-    int online = S(S_ONLINE);
+    int online = S(S_ONLINE), cur = S(S_FLOW);
 
-    static vrow rows[NT_MAX_RESULTS];
+    static vrow rows[3][NT_MAX_RESULTS];
+    int nr[3] = { 0, 0, 0 };
     char head[160], status[128];
-    int n = 0;
 
     pthread_mutex_lock(&g_lib_mu);
     nt_lib *L = &g_lib;
     status_line(status, sizeof status, L);
     int from = ref.deck >= 0 ? find_ref(L, &ref.t) : -1;
-    if (!g_lib_ready) snprintf(head, sizeof head, "Reading the library...");
-    else if (!L->n)
-        snprintf(head, sizeof head, "No rekordbox library yet, retrying...");
-    else if (ref.deck < 0) snprintf(head, sizeof head, "Play a track to get suggestions");
-    else if (from < 0) snprintf(head, sizeof head, "Deck %d: track not in the USB library", ref.deck + 1);
+    if (!g_lib_ready) snprintf(head, sizeof head, "%s", tr(T_READING));
+    else if (!L->n) {
+        static const int dt[] = { T_NOLIB, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED };
+        int c = atomic_load(&g_diag_code);
+        snprintf(head, sizeof head, "%s", tr(dt[c >= 0 && c <= 4 ? c : 0]));
+    } else if (ref.deck < 0) snprintf(head, sizeof head, "%s", tr(T_PLAY));
+    else if (from < 0) snprintf(head, sizeof head, tr(T_NOTIN), ref.deck + 1);
     else {
         char kc[4];
         nt_camelot_str(L->t[from].camelot, kc);
-        snprintf(head, sizeof head, "%s D%d: %s  %.1f %s", chain ? "Plan after" : "After", ref.deck + 1,
+        snprintf(head, sizeof head, "%s D%d: %s  %.1f %s", tr(chain ? T_PLAN : T_AFTER), ref.deck + 1,
                  nt_str(L, L->t[from].title), ref.bpm > 0 ? ref.bpm : L->t[from].bpm, kc);
         uint8_t *exb = calloc((size_t)L->n, 1);
         if (exb) {
             mark_ident(L, exb, L->t[from].ident);
             for (int i = 0; i < nex; i++) mark_ident(L, exb, nt_ident(ex[i].artist, ex[i].title));
-            ctx.excluded = exb;
-            int out[NT_MAX_RESULTS];
-            nt_reason why[NT_MAX_RESULTS];
-            n = chain ? nt_chain(L, &ctx, from, ref.bpm, k, out, why)
-                      : nt_rank(L, &ctx, from, ref.bpm, k, out, why);
-            for (int i = 0; i < n; i++) {
-                const nt_track *t = &L->t[out[i]];
-                vrow *r = &rows[i];
-                int prev = chain && i ? out[i - 1] : from;
-                char kc2[4];
-                nt_camelot_str(t->camelot, kc2);
-                snprintf(r->title, sizeof r->title, "%s", nt_str(L, t->title));
-                snprintf(r->artist, sizeof r->artist, "%s", nt_str(L, t->artist));
-                if (t->bpm > 0) snprintf(r->meta, sizeof r->meta, "%.1f  %s", t->bpm, kc2);
-                else snprintf(r->meta, sizeof r->meta, "%s", kc2);
-                nt_reason_str(L, &why[i], prev, out[i], r->why, sizeof r->why);
-                snprintf(r->where, sizeof r->where, "%s%s", t->stick ? "USB2 " : "", nt_str(L, t->where));
-                r->score = why[i].total;
-                r->known = why[i].pair_count > 0;
-                /* ask the web about tracks we know nothing about yet */
-                if (online && !nt_pair_get(&L->sim, 0, t->ident))
-                    queue_job(t->ident, nt_str(L, t->artist), nt_str(L, t->title), 0);
+            for (int f = 0; f < 3; f++) {                 /* one list per energy tab */
+                nt_ctx ctx = { f, S(S_ARTIST), exb };
+                int out[NT_MAX_RESULTS];
+                nt_reason why[NT_MAX_RESULTS];
+                int n = chain ? nt_chain(L, &ctx, from, ref.bpm, k, out, why)
+                              : nt_rank(L, &ctx, from, ref.bpm, k, out, why);
+                for (int i = 0; i < n; i++) {
+                    const nt_track *t = &L->t[out[i]];
+                    vrow *r = &rows[f][i];
+                    int prev = chain && i ? out[i - 1] : from;
+                    char kc2[4];
+                    nt_camelot_str(t->camelot, kc2);
+                    snprintf(r->title, sizeof r->title, "%s", nt_str(L, t->title));
+                    snprintf(r->artist, sizeof r->artist, "%s", nt_str(L, t->artist));
+                    if (t->bpm > 0) snprintf(r->meta, sizeof r->meta, "%.1f  %s", t->bpm, kc2);
+                    else snprintf(r->meta, sizeof r->meta, "%s", kc2);
+                    reason_text(L, &why[i], prev, out[i], r->why, sizeof r->why);
+                    snprintf(r->where, sizeof r->where, "%s%s", t->stick ? "USB2 " : "", nt_str(L, t->where));
+                    r->score = why[i].total;
+                    r->known = why[i].pair_count > 0;
+                    /* ask the web about the shown tracks we know nothing about yet */
+                    if (online && f == cur && !nt_pair_get(&L->sim, 0, t->ident))
+                        queue_job(t->ident, nt_str(L, t->artist), nt_str(L, t->title), 0);
+                }
+                nr[f] = n;
             }
             free(exb);
         }
@@ -532,9 +643,11 @@ static void compute(void)
     pthread_mutex_unlock(&g_lib_mu);
 
     pthread_mutex_lock(&g_view_mu);
-    g_view.n = n;
     g_view.chain = chain;
-    memcpy(g_view.r, rows, sizeof rows[0] * (size_t)n);
+    for (int f = 0; f < 3; f++) {
+        g_view.n[f] = nr[f];
+        memcpy(g_view.r[f], rows[f], sizeof rows[0][0] * (size_t)nr[f]);
+    }
     snprintf(g_view.head, sizeof g_view.head, "%s", head);
     snprintf(g_view.status, sizeof g_view.status, "%s", status);
     pthread_mutex_unlock(&g_view_mu);
@@ -1015,25 +1128,51 @@ static uint32_t score_color(float s, int known)
     return 0xe67e22;
 }
 
+/* Where the tab bar was drawn, for taps (UI thread). */
+static int tabs_y0 = -1, tabs_h, tabs_x0, tabs_w;
+
+/* The energy tabs: Smooth | Build up | Cool down, the current one filled. */
+static void draw_tabs(az_draw *d, int x, int y, int w, int h, int px)
+{
+    const uint32_t hi = C->color(AZ_COL_HI), fg = C->color(AZ_COL_TEXT), dim = C->color(AZ_COL_TEXT_DIM);
+    int cur = S(S_FLOW), tw = w / 3;
+    for (int f = 0; f < 3; f++) {
+        int tx = x + f * tw;
+        if (f == cur) C->fill_rect(d, tx + 2, y, tw - 4, h, hi);
+        else C->draw_rect(d, tx + 2, y, tw - 4, h, 1, dim);
+        const char *t = tr(FLOW_T[f]);
+        int lw = C->text_width(t, px);
+        if (lw > tw - 8) lw = tw - 8;
+        text(d, tx + (tw - lw) / 2, y + (h - px * 3 / 2) / 2, tw - 8, t, px,
+             f == cur ? C->color(AZ_COL_HI_TEXT) : fg);
+    }
+    tabs_y0 = y;
+    tabs_h = h;
+    tabs_x0 = x;
+    tabs_w = w;
+}
+
 /* The list, in area: used by both the panel and the Mod Menu page. */
 static void draw_list(az_draw *d, az_rect a, int px, int header)
 {
     const uint32_t fg = C->color(AZ_COL_TEXT), dim = C->color(AZ_COL_TEXT_DIM), hi = C->color(AZ_COL_HI);
     const int pad = px / 2, lh = px * 3 / 2, small = px * 4 / 5 > 8 ? px * 4 / 5 : 8, slh = small * 3 / 2;
-    int y = a.y;
+    int y = a.y, f = S(S_FLOW) % 3;
     pthread_mutex_lock(&g_view_mu);
     if (header) {
         C->fill_rect(d, a.x, a.y, a.w, 3, hi);
-        char h[48];
-        snprintf(h, sizeof h, "MIX PILOT  -  %s", g_view.chain ? "CHAIN" : "NEXT");
+        char h[64];
+        snprintf(h, sizeof h, "MIX PILOT  -  %s", tr(g_view.chain ? T_HDR_CHAIN : T_HDR_NEXT));
         text(d, a.x + pad, y + 6, a.w - 2 * pad, h, small, hi);
         y += 6 + slh;
     }
     text(d, a.x + pad, y, a.w - 2 * pad, g_view.head, small, fg);
     y += slh + 4;
+    draw_tabs(d, a.x + pad, y, a.w - 2 * pad, slh + 8, small);
+    y += slh + 8 + 6;
     int bar = px / 3 > 3 ? px / 3 : 3;
-    for (int i = 0; i < g_view.n && y + lh + slh <= a.y + a.h; i++) {
-        const vrow *r = &g_view.r[i];
+    for (int i = 0; i < g_view.n[f] && y + lh + slh <= a.y + a.h - slh; i++) {
+        const vrow *r = &g_view.r[f][i];
         int metaw = C->text_width(r->meta, small) + pad;
         C->fill_rect(d, a.x + pad, y + 2, bar, lh + slh - 6, score_color(r->score, r->known));
         int x = a.x + pad + bar + pad;
@@ -1044,11 +1183,12 @@ static void draw_list(az_draw *d, az_rect a, int px, int header)
         snprintf(line, sizeof line, "%s%s%s", r->title, r->artist[0] ? " - " : "", r->artist);
         text(d, x, y, a.x + a.w - pad - metaw - x, line, px, fg);
         C->draw_text(d, a.x + a.w - pad - metaw + pad, y + (lh - slh) / 2, r->meta, small, fg);
-        snprintf(line, sizeof line, "%s%s%s", r->why, r->where[0] ? "   in " : "", r->where);
+        snprintf(line, sizeof line, "%s%s%s%s", r->why, r->where[0] ? "   " : "", r->where[0] ? tr(T_IN) : "", "");
+        if (r->where[0]) snprintf(line + strlen(line), sizeof line - strlen(line), " %s", r->where);
         text(d, x, y + lh, a.x + a.w - pad - x, line, small, dim);
         y += lh + slh + 4;
     }
-    if (y + slh <= a.y + a.h) text(d, a.x + pad, a.y + a.h - slh, a.w - 2 * pad, g_view.status, small, dim);
+    text(d, a.x + pad, a.y + a.h - slh, a.w - 2 * pad, g_view.status, small, dim);
     pthread_mutex_unlock(&g_view_mu);
 }
 
@@ -1060,9 +1200,11 @@ static void panel_paint(az_draw *d, az_rect a, void *user)
         C->fill_rect(d, a.x, a.y, a.w, 3, hi);
         pthread_mutex_lock(&g_view_mu);
         char s[200];
-        snprintf(s, sizeof s, "MIX PILOT  %s", g_view.n ? g_view.r[0].title : "");
+        int f = S(S_FLOW) % 3;
+        snprintf(s, sizeof s, "MIX PILOT  %s", g_view.n[f] ? g_view.r[f][0].title : "");
         pthread_mutex_unlock(&g_view_mu);
         text(d, a.x + 8, a.y + 8, a.w - 16, s, 15, C->color(AZ_COL_TEXT));
+        tabs_y0 = -1;
         return;
     }
     draw_list(d, a, 18, 1);
@@ -1082,8 +1224,13 @@ static void set_value(int i, int v)
 static int panel_input(const az_event *ev, void *user)
 {
     (void)user;
-    if (ev->kind == AZ_EV_TAP) {                          /* tap: Next <-> Chain */
-        set_value(S_MODE, S(S_MODE) ? 0 : 1);
+    if (ev->kind == AZ_EV_TAP) {
+        if (tabs_y0 >= 0 && ev->y >= tabs_y0 && ev->y < tabs_y0 + tabs_h && tabs_w > 0) {
+            int f = (ev->x - tabs_x0) * 3 / tabs_w;     /* a tab: that energy */
+            if (f >= 0 && f < 3) set_value(S_FLOW, f);
+        } else {
+            set_value(S_MODE, S(S_MODE) ? 0 : 1);         /* elsewhere: Next <-> Chain */
+        }
         return 1;
     }
     if (ev->kind == AZ_EV_LONG) {                         /* long press: fold / unfold */
@@ -1103,7 +1250,7 @@ static void place_panel(void)
         return;
     }
     int k = COUNTS[S(S_COUNT) & 3];
-    int w = 470, h = panel_small ? 40 : 6 + 22 + 26 + k * (27 + 21 + 4) + 26;
+    int w = 470, h = panel_small ? 40 : 6 + 22 + 26 + 36 + k * (27 + 21 + 4) + 26;
     if (h > 700) h = 700;
     az_rect r = { where == 1 ? 10 : 1280 - w - 10, 90, w, h };
     C->surface_place(panel, r);
@@ -1121,29 +1268,28 @@ static void reload_now(void)
 {
     atomic_store(&want_reload, 1);
     atomic_store(&community_pending, 1);
-    C->banner(MOD_ID, "Mix Pilot: reading the library again", 1500);
+    C->banner(MOD_ID, tr(T_BANNER), 1500);
 }
 
 static void item_text(int it, char *label, size_t ln, char *value, size_t vn)
 {
     value[0] = '\0';
-    if (it == IT_SUGGEST) snprintf(label, ln, "Show suggestions  >");
-    else if (it == IT_RELOAD) snprintf(label, ln, "Reload library");
+    if (it == IT_SUGGEST) snprintf(label, ln, "%s", tr(T_SHOW));
+    else if (it == IT_RELOAD) snprintf(label, ln, "%s", tr(T_RELOAD));
     else {
         int i = it - IT_FIRST_SET;
-        snprintf(label, ln, "%s", SET[i].label);
-        snprintf(value, vn, "%s", SET[i].choices[S(i)]);
+        snprintf(label, ln, "%s", tr(SET[i].label));
+        choice_text(i, S(i), value, vn);
     }
 }
 
 static void draw_credits(az_draw *d, az_rect a, int px)
 {
     const int lh = px * 3 / 2, pad = px;
-    int y = a.y + a.h - 3 * lh - pad / 2;
+    int y = a.y + a.h - 2 * lh - pad / 2;
     C->fill_rect(d, a.x + pad, y - pad / 2, a.w - 2 * pad, 1, C->color(AZ_COL_TEXT_DIM));
-    text(d, a.x + pad, y, a.w - 2 * pad, "Vous aimez Mix Pilot ? Suivez-nous sur Instagram !", px, C->color(AZ_COL_TEXT));
-    text(d, a.x + pad, y + lh, a.w - 2 * pad, "Love Mix Pilot? Follow us on Instagram!", px, C->color(AZ_COL_TEXT_DIM));
-    text(d, a.x + pad, y + 2 * lh, a.w - 2 * pad, "@blinkevent38    @christopheb38", px, C->color(AZ_COL_HI));
+    text(d, a.x + pad, y, a.w - 2 * pad, tr(T_LOVE), px, C->color(AZ_COL_TEXT));
+    text(d, a.x + pad, y + lh, a.w - 2 * pad, "@blinkevent38    @christopheb_38", px, C->color(AZ_COL_HI));
 }
 
 static void page_draw(az_draw *d, az_rect area, void *user)
@@ -1152,7 +1298,7 @@ static void page_draw(az_draw *d, az_rect area, void *user)
     int row = C->row_height(d);
     int px = row / 2 > 14 ? row / 2 : 14;
     if (px > 24) px = 24;
-    C->draw_header(d, page_list ? "Mix Pilot - Suggestions" : "Mix Pilot");
+    C->draw_header(d, page_list ? tr(T_SUGG_TITLE) : "Mix Pilot");
     az_rect a = { area.x, area.y + row, area.w, area.h - row };
     if (a.h < px * 4) return;
     if (page_list) {
@@ -1160,7 +1306,7 @@ static void page_draw(az_draw *d, az_rect area, void *user)
         return;
     }
     const int small = px * 4 / 5 > 10 ? px * 4 / 5 : 10;
-    int credits_h = 3 * (small * 3 / 2) + small * 2;
+    int credits_h = 2 * (small * 3 / 2) + small * 2;
     int lines = (a.h - credits_h) / row;
     if (lines < 1) lines = 1;
     if (page_sel < page_top) page_top = page_sel;
@@ -1208,7 +1354,12 @@ static int page_input(const az_event *ev, void *user)
             C->request_redraw();
             return 1;
         }
-        return ev->kind == AZ_EV_KNOB;
+        if (ev->kind == AZ_EV_KNOB) {                     /* the knob changes the energy tab */
+            set_value(S_FLOW, (S(S_FLOW) + (ev->dir < 0 ? 2 : 1)) % 3);
+            C->request_redraw();
+            return 1;
+        }
+        return 0;
     }
     switch (ev->kind) {
     case AZ_EV_KNOB:

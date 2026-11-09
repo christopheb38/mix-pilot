@@ -531,14 +531,18 @@ float nt_score(const nt_lib *L, const nt_ctx *c, int from, double from_bpm, int 
     float t = 0.24f * r->key + 0.24f * r->bpm + 0.18f * r->style + 0.12f * r->sim + 0.22f * r->pair;
     if (r->bpm < 0.08f && r->pair <= 0) t *= 0.55f;
 
+    /* Energy. pct < 0: the next track is natively faster (we pitch it down to meet us).
+     * Build up wants faster tracks and rising keys, Cool down the opposite, Smooth no move. */
     int flow = c ? c->flow : NT_FLOW_SMOOTH;
+    int up = r->pct < -0.3 && r->pct > -8, down = r->pct > 0.3 && r->pct < 8;
+    int kup = r->step == 1 || r->step == 2 || r->step == -5, kdown = r->step == -1 || r->step == -2 || r->step == 5;
     if (flow == NT_FLOW_UP) {
-        /* pct > 0 means the next track is pitched up to meet us: it is natively slower */
-        if (r->pct < -0.3 && r->pct > -5) t += 0.04f;
-        if (r->step == 1 || r->step == 2 || r->step == -5) t += 0.04f;
+        t += (up ? 0.09f : down ? -0.09f : 0) + (kup ? 0.06f : kdown ? -0.05f : 0);
     } else if (flow == NT_FLOW_DOWN) {
-        if (r->pct > 0.3 && r->pct < 5) t += 0.04f;
-        if (r->step == -1 || r->step == -2 || r->step == 5) t += 0.04f;
+        t += (down ? 0.09f : up ? -0.09f : 0) + (kdown ? 0.06f : kup ? -0.05f : 0);
+    } else {
+        if (r->pct > -1.0 && r->pct < 1.0) t += 0.03f;
+        if (r->step == 0) t += 0.03f;
     }
     if (c && c->same_artist_penalty && a->artist && b->artist && a->aident == b->aident)
         t -= 0.08f;
