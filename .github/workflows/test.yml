@@ -21,12 +21,14 @@ jobs:
           ref: v1.2.3
           path: .azmod-sdk
       - name: Toolchain
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang gcc make >/dev/null
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang gcc make libcurl4 >/dev/null
       - name: Engine
         run: make engine-test TEST_CC=clang
       - name: Simulation (ThreadSanitizer)
         run: make sim TEST_CC=clang AZ_SDK_INCLUDE=.azmod-sdk/include
       - name: Simulation, built like the deck (GCC, -O2, _FORTIFY_SOURCE=2, ASan)
         run: make sim-fortify TEST_CC=gcc AZ_SDK_INCLUDE=.azmod-sdk/include
+      - name: Network path (real Last.fm, impossible key, 3 threads, ASan)
+        run: make net-test TEST_CC=gcc
       - name: SDK harness
         run: make test AZ_SDK=.azmod-sdk AZ_SDK_INCLUDE=.azmod-sdk/include

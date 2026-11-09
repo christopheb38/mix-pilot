@@ -115,7 +115,7 @@ engine-test:
 	    -o $(OUT)/engine_test tests/engine_test.c engine.c minijson.c pdb.c online.c -lm -ldl -lpthread
 	$(OUT)/engine_test
 
-SIM_FLAGS := -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
+SIM_FLAGS := -DMP_OFFLINE -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
     -DMP_MOUNTS='"/tmp/mixpilot-fake/mounts"' -DMP_MEDIA='"/tmp/mixpilot-fake/media/usb"' \
     -DMP_SYSBLOCK='"/tmp/mixpilot-fake/sys/class/block"'
 
@@ -142,3 +142,13 @@ sim-fortify:
 pdbdump:
 	@mkdir -p $(OUT)
 	$(TEST_CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined -o $(OUT)/pdbdump tests/pdbdump.c pdb.c
+
+# The real network path, against Last.fm with a key that cannot be valid: from 3 threads at
+# once, under AddressSanitizer. It must not crash and must report a refused key (or, without
+# internet, a network failure). Needs libcurl (libcurl.so.4) and a connection.
+.PHONY: net-test
+net-test:
+	@mkdir -p $(OUT)
+	$(TEST_CC) -std=gnu11 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
+	    -o $(OUT)/net_test tests/net_test.c online.c minijson.c -ldl -lpthread
+	$(OUT)/net_test

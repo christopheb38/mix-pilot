@@ -19,6 +19,7 @@ typedef int (*easy_perform_fn)(CURL *);
 typedef int (*easy_getinfo_fn)(CURL *, int, ...);
 typedef void (*easy_cleanup_fn)(CURL *);
 typedef const char *(*easy_strerror_fn)(int);
+typedef int (*global_init_fn)(long);
 
 #define O_WRITEDATA 10001
 #define O_URL 10002
@@ -58,6 +59,9 @@ const char *net_last_error(void)
 int net_available(void)
 {
     pthread_mutex_lock(&cu_mu);
+#ifdef MP_OFFLINE
+    cu.tried = 1;                                         /* tests: never touch the network */
+#endif
     if (!cu.tried) {
         cu.tried = 1;
         static const char *const names[] = { "libcurl.so.4", "libcurl-gnutls.so.4", "libcurl.so", NULL };
@@ -71,6 +75,10 @@ int net_available(void)
             cu.cleanup = (easy_cleanup_fn)dlsym(h, "curl_easy_cleanup");
             cu.strerror_ = (easy_strerror_fn)dlsym(h, "curl_easy_strerror");
             cu.ok = cu.init && cu.setopt && cu.perform && cu.getinfo && cu.cleanup;
+            /* libcurl's contract: curl_global_init before any other call, once (it counts calls,
+             * so another user of libcurl in the process is not disturbed) */
+            global_init_fn gi = (global_init_fn)dlsym(h, "curl_global_init");
+            if (cu.ok && (!gi || gi(3L /* CURL_GLOBAL_DEFAULT */) != 0)) cu.ok = 0;
         }
     }
     int ok = cu.ok;
