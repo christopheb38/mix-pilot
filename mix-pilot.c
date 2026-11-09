@@ -1603,7 +1603,7 @@ static int panel_input(const az_event *ev, void *user)
 
 /* The bottom of the browse list on the 1280x800 screen: the decks' info strip starts below it. */
 #ifndef BOTTOM_EDGE
-#define BOTTOM_EDGE 704   /* measured on a deck photo: the decks' info starts at ~705 */
+#define BOTTOM_EDGE 707   /* measured on deck photos: the decks' info strip starts here */
 #endif
 
 static void place_panel(void)
