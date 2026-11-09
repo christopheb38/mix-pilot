@@ -416,7 +416,7 @@ static int on_track_pl(const az_track *t, void *user)
 static atomic_int g_rc[2][2];     /* per stick: lib_tracks(all) and lib_playlists results, for the screen */
 static pthread_mutex_t g_diag_mu = PTHREAD_MUTEX_INITIALIZER;
 static char g_diag[96];          /* what we found on the sticks when the core gave no library */
-static atomic_int g_diag_code;   /* 0 none, 1 no stick, 2 export.pdb only, 3 port not recognized, 4 refused, 5 no export */
+static atomic_int g_diag_code;   /* 0 none, 1 no stick, 2 export.pdb only, 3 port not recognized, 4 refused, 5 no export, 6 hidden .PIONEER */
 
 /* The USB port of a block device, by the same rule as the core (sdk_lib.c): 1, 2, or 0 unknown. */
 static int port_of_sysfs(const char *real)
@@ -457,9 +457,9 @@ static int port_of_sysfs(const char *real)
 /* When the core reads no library: look at the sticks ourselves and say why, in plain words. */
 static void diagnose(void)
 {
-    /* codes, most useful first: 4 refused, 3 port unknown, 2 export.pdb only, 5 stick without a
-     * rekordbox export, 1 no stick at all */
-    static const int rank[6] = { 0, 1, 4, 5, 6, 3 };
+    /* codes, most useful first: 4 refused, 3 port unknown, 2 export.pdb only, 6 library only in
+     * the hidden .PIONEER folder, 5 stick without a rekordbox export, 1 no stick at all */
+    static const int rank[7] = { 0, 1, 4, 6, 7, 2, 5 };
     char out[96] = "";
     int code = 1, o = 0;
     FILE *f = fopen(MP_MOUNTS, "re");
@@ -480,6 +480,12 @@ static void diagnose(void)
             int pdb = access(p, R_OK) == 0;
             snprintf(p, sizeof p, "%s/PIONEER", mp);
             int pioneer = access(p, F_OK) == 0;
+            /* rekordbox can also keep the library in a hidden .PIONEER folder, which the core's
+             * library service does not read */
+            snprintf(p, sizeof p, "%s/.PIONEER/rekordbox/exportLibrary.db", mp);
+            int hdb = access(p, R_OK) == 0;
+            snprintf(p, sizeof p, "%s/.PIONEER/rekordbox/export.pdb", mp);
+            int hpdb = access(p, R_OK) == 0;
             /* what PIONEER/rekordbox holds: the entry count here, the first names in the log */
             int nrb = -1;
             char names[160] = "";
@@ -499,14 +505,15 @@ static void diagnose(void)
             }
             snprintf(sys, sizeof sys, "%s/%s", MP_SYSBLOCK, dev + 5);
             int port = realpath(sys, real) ? port_of_sysfs(real) : 0;
-            int c = db ? (port ? 4 : 3) : pdb ? 2 : 5;
+            int c = db ? (port ? 4 : 3) : pdb ? 2 : (hdb || hpdb) ? 6 : 5;
             if (rank[c] > rank[code]) code = c;
             if (o < (int)sizeof out - 1)
-                o += snprintf(out + o, sizeof out - (size_t)o, "%s%s:%s%s p%d %s R%d", o ? " " : "", dev + 5,
-                              db ? "db" : "", pdb ? (db ? "+pdb" : "pdb") : (db ? "" : "-"), port,
-                              pioneer ? "P+" : "P-", nrb);
-            tlog("%s on %s: db %d, pdb %d, port %d, PIONEER %d, rekordbox/: %s", dev, mp, db, pdb, port,
-                 pioneer, nrb < 0 ? "missing" : names);
+                o += snprintf(out + o, sizeof out - (size_t)o, "%s%s:%s%s p%d %s R%d%s%s%s", o ? " " : "",
+                              dev + 5, db ? "db" : "", pdb ? (db ? "+pdb" : "pdb") : (db ? "" : "-"), port,
+                              pioneer ? "P+" : "P-", nrb, (hdb || hpdb) ? " H:" : "", hdb ? "db" : "",
+                              hpdb ? (hdb ? "+pdb" : "pdb") : "");
+            tlog("%s on %s: db %d, pdb %d, port %d, PIONEER %d, rekordbox/: %s, hidden .PIONEER db %d pdb %d",
+                 dev, mp, db, pdb, port, pioneer, nrb < 0 ? "missing" : names, hdb, hpdb);
         }
         fclose(f);
     }
@@ -677,9 +684,9 @@ static void compute(void)
     int from = ref.deck >= 0 ? find_ref(L, &ref.t) : -1;
     if (!g_lib_ready) snprintf(head, sizeof head, "%s", tr(T_READING));
     else if (!L->n) {
-        static const int dt[] = { T_NOLIB, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT };
+        static const int dt[] = { T_NOLIB, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT, T_D_HIDDEN };
         int c = atomic_load(&g_diag_code);
-        snprintf(head, sizeof head, "%s", tr(dt[c >= 0 && c <= 5 ? c : 0]));
+        snprintf(head, sizeof head, "%s", tr(dt[c >= 0 && c <= 6 ? c : 0]));
     } else if (ref.deck < 0) snprintf(head, sizeof head, "%s", tr(T_PLAY));
     else if (from < 0) snprintf(head, sizeof head, tr(T_NOTIN), ref.deck + 1);
     else {

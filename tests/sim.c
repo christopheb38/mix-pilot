@@ -205,7 +205,9 @@ static void make_fake_stick(void)
                     " && touch " FAKE "/media/usb/sdz1/PIONEER/rekordbox/export.pdb"
                     " && ln -s " FAKE "/sys/devices/soc/usb1/1-1/1-1:1.0/host0/target0/block/sdz1 " FAKE
                     "/sys/class/block/sdz1"
-                    " && mkdir -p " FAKE "/media/usb/sdy1/MODS " FAKE "/sys/devices/soc/usb2/2-1/2-1:1.0/host1/target1/block/sdy1"
+                    " && mkdir -p " FAKE "/media/usb/sdy1/MODS " FAKE "/media/usb/sdy1/.PIONEER/rekordbox"
+                    " && touch " FAKE "/media/usb/sdy1/.PIONEER/rekordbox/exportLibrary.db"
+                    " && mkdir -p " FAKE "/sys/devices/soc/usb2/2-1/2-1:1.0/host1/target1/block/sdy1"
                     " && ln -s " FAKE "/sys/devices/soc/usb2/2-1/2-1:1.0/host1/target1/block/sdy1 " FAKE "/sys/class/block/sdy1"
                     " && printf '/dev/sdz1 " FAKE "/media/usb/sdz1 vfat rw 0 0\\n/dev/sdy1 " FAKE "/media/usb/sdy1 vfat rw 0 0\\n' > " FAKE "/mounts");
     if (rc != 0) { fails++; fprintf(stderr, "sim: could not build the fake stick\n"); }
@@ -230,8 +232,8 @@ int main(void)
     CHECK(nrows == 1 && row_screen != NULL);            /* one row in the Mod Menu, opening our page */
     run(1.0);
     dump("stick not readable yet");
-    CHECK(screen_has("No exportLibrary.db") && screen_has("USB1 -1/-1") && screen_has("sdz1:pdb p1 P+ R1"));
-    CHECK(screen_has("sdy1:- p2 P- R-1"));                  /* the stick with no export: as on the deck */
+    CHECK(screen_has("hidden .PIONEER folder") && screen_has("USB1 -1/-1") && screen_has("sdz1:pdb p1 P+ R1"));
+    CHECK(screen_has("sdy1:- p2 P- R-1 H:db"));             /* library only in the hidden .PIONEER */
     __atomic_store_n(&lib_ready, 1, __ATOMIC_RELEASE);  /* the stick becomes readable */
     run(2.5);
     dump("empty decks");

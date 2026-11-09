@@ -125,13 +125,15 @@ branchée **directement** sur USB 1 ou USB 2. Le panneau dit ce qu'il a trouvé 
 |---|---|
 | *No exportLibrary.db: export with Device Library Plus* | la clé n'a que l'ancien format `export.pdb` : réexporte-la depuis rekordbox 7 avec Device Library Plus |
 | *USB port not recognized: plug the stick straight in* | la clé passe par un hub ou un adaptateur : branche-la directement |
+| *Library is in the hidden .PIONEER folder* | rekordbox a rangé la bibliothèque dans `.PIONEER/rekordbox/` (dossier caché), que le service de bibliothèque d'AZ-MODS ne lit pas encore |
 | *USB stick found, but no rekordbox export on it* | la clé n'a pas de dossier `PIONEER/rekordbox` : la musique y a été copiée sans passer par l'export de rekordbox |
 | *The deck sees no USB stick* | aucune clé montée par le deck |
 | *Library refused by the deck (codes below)* | envoie-nous la ligne du bas (`USB1 -1/-1 ... sda1:db p1 P+ R5`) |
 
 La ligne du bas se lit ainsi : `sda1` la clé, `db` / `pdb` / `-` les fichiers de bibliothèque
 trouvés, `p1` le port (0 = non reconnu), `P+` le dossier `PIONEER` présent, `R5` le nombre de
-fichiers dans `PIONEER/rekordbox` (`R-1` = dossier absent).
+fichiers dans `PIONEER/rekordbox` (`R-1` = dossier absent), `H:db` une bibliothèque dans le
+dossier caché `.PIONEER/rekordbox`.
 
 Les textes sont écrits sans accents : la police du deck ne les affiche pas. Les titres et
 artistes de ta clé sont convertis de la même façon à l'affichage (é → e, ß → ss…).

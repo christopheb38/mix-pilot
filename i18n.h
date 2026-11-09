@@ -14,7 +14,7 @@ enum {
     T_RIGHT, T_LEFT, T_HIDDEN, T_OFF, T_ON, T_NEXT, T_CHAIN, T_SMOOTH, T_UP, T_DOWN, T_AUTO, T_DECK,
     T_HDR_NEXT, T_HDR_CHAIN, T_READING, T_NOLIB, T_PLAY, T_NOTIN, T_AFTER, T_PLAN, T_MIXED, T_SIMILAR,
     T_IN, T_TRACKS, T_KNOWN, T_NET_KEY, T_NET_OFFLINE, T_NET_ON, T_NET_FAIL, T_NET_DISABLED, T_BANNER,
-    T_LOVE, T_SUGG_TITLE, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT, T_N
+    T_LOVE, T_SUGG_TITLE, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT, T_D_HIDDEN, T_N
 };
 
 /* Plain ASCII only: the deck's font draws no accented letters (boxes or wrong glyphs). */
@@ -95,6 +95,11 @@ static const char *const TR[T_N][LANG_N] = {
                        "Memoria USB encontrada, pero sin exportacion rekordbox",
                        "USB-Stick gefunden, aber ohne rekordbox-Export",
                        "Chiavetta USB trovata, ma senza export rekordbox" },
+    [T_D_HIDDEN] = { "Library is in the hidden .PIONEER folder",
+                     "Bibliotheque dans le dossier cache .PIONEER",
+                     "Biblioteca en la carpeta oculta .PIONEER",
+                     "Bibliothek im versteckten Ordner .PIONEER",
+                     "Libreria nella cartella nascosta .PIONEER" },
 };
 
 #endif
