@@ -3,5 +3,28 @@
   "name": "Mix Pilot",
   "maintainer": "christopheb38",
   "homepage": "https://github.com/christopheb38/mix-pilot",
-  "mods": []
+  "mods": [
+    {
+      "id": "mix-pilot",
+      "name": "Mix Pilot",
+      "version": "0.1.0",
+      "author": "christopheb38",
+      "summary": "Next-track suggestions: what mixes best after the playing track, by key, tempo, style and real DJ transitions.",
+      "icon": "https://github.com/christopheb38/mix-pilot/releases/download/mix-pilot-0.1.0/mix-pilot-0.1.0-icon.png",
+      "package": "https://github.com/christopheb38/mix-pilot/releases/download/mix-pilot-0.1.0/mix-pilot-0.1.0.azmod",
+      "sha256": "2271fa092a8ad5f09d540e4bb3e27f5d61986725e35f5d86449ba886f139a9fe",
+      "size": 126925,
+      "firmware": [
+        "any"
+      ],
+      "hooks": false,
+      "source": "https://github.com/christopheb38/mix-pilot",
+      "updated": "2026-11-09",
+      "category": "tools",
+      "license": "GPL-3.0-only",
+      "min_core": "1.2.3",
+      "description": "Shows the tracks that mix best after the playing one, on BROWSE and SEARCH and in the Mod Menu: the best next tracks, or a chain where each track mixes into the next. It scores key (Camelot), tempo, style (Last.fm tags, shared playlists) and transitions DJs really play: yours, learned as you mix, and a community pairings file.\n\nReads deck state and the USB library (read-only), writes its own files in its USB data folder, and uses WiFi for Last.fm and an optional pairings URL. No code patches, no change to controls, LEDs or audio.",
+      "assets_kb": 1
+    }
+  ]
 }
