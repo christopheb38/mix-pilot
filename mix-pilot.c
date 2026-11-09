@@ -25,6 +25,7 @@
  */
 #include <limits.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -177,6 +178,45 @@ static double now_s(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+/* Log lines from the worker and net threads: queued here, written by tick() on the UI thread,
+ * and a line seen among the last 8 is dropped (log only when something changes). */
+static pthread_mutex_t g_log_mu = PTHREAD_MUTEX_INITIALIZER;
+static char g_logq[8][200], g_log_seen[8][200];
+static int g_nlog, g_seen_next;
+
+static void tlog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void tlog(const char *fmt, ...)
+{
+    char line[200];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    pthread_mutex_lock(&g_log_mu);
+    int seen = 0;
+    for (int i = 0; i < 8; i++)
+        if (!strcmp(g_log_seen[i], line)) seen = 1;
+    if (!seen && g_nlog < 8) {
+        snprintf(g_logq[g_nlog++], sizeof g_logq[0], "%s", line);
+        snprintf(g_log_seen[g_seen_next], sizeof g_log_seen[0], "%s", line);
+        g_seen_next = (g_seen_next + 1) % 8;
+    }
+    pthread_mutex_unlock(&g_log_mu);
+}
+
+/* UI thread: write the queued lines. */
+static void flush_log(void)
+{
+    char q[8][200];
+    int n;
+    pthread_mutex_lock(&g_log_mu);
+    n = g_nlog;
+    memcpy(q, g_logq, sizeof q[0] * (size_t)n);
+    g_nlog = 0;
+    pthread_mutex_unlock(&g_log_mu);
+    for (int i = 0; i < n; i++) C->log(MOD_ID, "%s", q[i]);
 }
 
 static void nap_ms(int ms)
@@ -448,7 +488,7 @@ static void diagnose(void)
     snprintf(g_diag, sizeof g_diag, "%s", out);
     pthread_mutex_unlock(&g_diag_mu);
     atomic_store(&g_diag_code, code);
-    C->log(MOD_ID, "sticks: %s (code %d)", out[0] ? out : "none mounted", code);
+    tlog("sticks: %s (code %d)", out[0] ? out : "none mounted", code);
 }
 
 static int build_library(nt_lib *L)
@@ -464,7 +504,7 @@ static int build_library(nt_lib *L)
         int rp = C->lib_playlists(MOD_ID, stick, on_playlist, pls);
         atomic_store(&g_rc[stick][0], rt);
         atomic_store(&g_rc[stick][1], rp);
-        C->log(MOD_ID, "USB %d: all tracks -> %d (%d so far), playlists -> %d (%d)", stick + 1, rt, L->n, rp, pls->n);
+        tlog("USB %d: all tracks -> %d (%d so far), playlists -> %d (%d)", stick + 1, rt, L->n, rp, pls->n);
         if (rp < 0) continue;                             /* tracks only, or no library there */
         for (int i = 0; i < pls->n && plbase + i < 4096; i++) {
             if (pls->folder[i]) continue;
@@ -716,7 +756,7 @@ static void *worker(void *arg)
                 g_lib_ready = 1;
                 pthread_mutex_unlock(&g_lib_mu);
                 nt_lib_free(&old);
-                C->log(MOD_ID, "library: %d tracks, %u transitions, %u web pairs", fresh.n, fresh.pairs.n,
+                tlog("library: %d tracks, %u transitions, %u web pairs", fresh.n, fresh.pairs.n,
                        fresh.sim.n);
             } else {
                 nt_lib_free(&fresh);
@@ -869,7 +909,7 @@ static void fetch_community(const char *url)
                 int ok = fwrite(body, 1, len, f) == len;
                 ok = fclose(f) == 0 && ok;
                 if (ok && rename(tmp, p) == 0) {
-                    C->log(MOD_ID, "community pairings: %zu bytes", len);
+                    tlog("community pairings: %zu bytes", len);
                     atomic_store(&want_reload, 1);
                 } else {
                     remove(tmp);
@@ -877,7 +917,7 @@ static void fetch_community(const char *url)
             }
         }
     } else {
-        C->log(MOD_ID, "community pairings: download failed (%d)", code);
+        tlog("community pairings: download failed (%d)", code);
     }
     free(body);
 }
@@ -1432,6 +1472,7 @@ static void register_rows(void)
 
 static void tick(void)
 {
+    flush_log();
     double t = now_s();
     static double next_poll;
     if (t >= next_poll) {
