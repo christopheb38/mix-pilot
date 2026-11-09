@@ -115,17 +115,23 @@ tempo, playlists, tes enchaînements, fichier communautaire). Les réponses de L
 en cache sur la clé (`lastfm-cache.tsv`), donc un morceau déjà vu reste enrichi hors ligne en
 soirée.
 
-## Si le panneau n'affiche pas de suggestions
+## Où le mod trouve ta bibliothèque
 
-Le mod lit ta bibliothèque par le service d'AZ-MODS, qui ne lit que le fichier
-`PIONEER/rekordbox/exportLibrary.db` (format **Device Library Plus** de rekordbox 7) d'une clé
-branchée **directement** sur USB 1 ou USB 2. Le panneau dit ce qu'il a trouvé :
+1. Par le service d'AZ-MODS, qui lit `PIONEER/rekordbox/exportLibrary.db` (Device Library Plus)
+   d'une clé branchée directement sur USB 1 ou USB 2.
+2. Sinon, Mix Pilot lit lui-même **`export.pdb`**, dans `PIONEER/rekordbox/` ou dans le dossier
+   **caché `.PIONEER/rekordbox/`**, où rekordbox range parfois la bibliothèque (sur une clé au
+   format Mac, par exemple). Ce format est documenté publiquement et n'est pas chiffré. Il apporte
+   en plus le **genre** rekordbox de chaque morceau, utilisé pour le style. La ligne du bas
+   indique alors « (pdb) » après le nombre de morceaux.
+
+Si rien n'est trouvé, le panneau dit pourquoi :
 
 | Message | Que faire |
 |---|---|
 | *No exportLibrary.db: export with Device Library Plus* | la clé n'a que l'ancien format `export.pdb` : réexporte-la depuis rekordbox 7 avec Device Library Plus |
 | *USB port not recognized: plug the stick straight in* | la clé passe par un hub ou un adaptateur : branche-la directement |
-| *Library is in the hidden .PIONEER folder* | rekordbox a rangé la bibliothèque dans `.PIONEER/rekordbox/` (dossier caché), que le service de bibliothèque d'AZ-MODS ne lit pas encore |
+| *Library is in the hidden .PIONEER folder* | la bibliothèque est dans `.PIONEER/rekordbox/` mais sans `export.pdb` lisible : réexporte la clé depuis rekordbox |
 | *USB stick found, but no rekordbox export on it* | la clé n'a pas de dossier `PIONEER/rekordbox` : la musique y a été copiée sans passer par l'export de rekordbox |
 | *The deck sees no USB stick* | aucune clé montée par le deck |
 | *Library refused by the deck (codes below)* | envoie-nous la ligne du bas (`USB1 -1/-1 ... sda1:db p1 P+ R5`) |
@@ -177,6 +183,8 @@ make test AZ_SDK=<sdk> AZ_SDK_INCLUDE=<sdk>/include   # harnais officiel du SDK,
 | `mix-pilot.c` | le mod : decks, lecture de la bibliothèque, apprentissage, panneau, page, réglages |
 | `online.c/.h` | HTTPS via la libcurl du deck (dlopen) et l'API Last.fm |
 | `minijson.c/.h` | lecteur JSON strict, jamais évalué |
+| `pdb.c/.h` | lecteur de `export.pdb` (format DeviceSQL de rekordbox), chaque lecture vérifiée |
+| `i18n.h` | les textes en anglais, français, espagnol, allemand et italien |
 | `tests/` | tests du moteur et simulation de bout en bout |
 
 Threads, conformément aux règles du SDK : le fil UI ne fait ni fichier ni réseau ; un thread
@@ -192,8 +200,8 @@ Last.fm (au plus ~5 requêtes/s, pause de 30 s si le réseau tombe).
   rekordbox, donc un morceau joué hors bibliothèque n'a pas de suggestions.
 - Le mod ne peut pas charger un morceau tout seul dans un deck (pas d'API pour ça) : il te dit
   où le trouver.
-- Le genre rekordbox n'est pas exposé par l'API des mods ; le style vient de Last.fm et des
-  playlists. Lire le genre directement dans `export.pdb` est une piste pour la v0.2.
+- Le genre rekordbox n'est disponible que quand la bibliothèque est lue depuis `export.pdb`
+  (le service d'AZ-MODS ne le fournit pas) ; sinon le style vient de Last.fm et des playlists.
 - Change l'`id` avant de publier si `mix-pilot` est déjà pris dans le Mod Index (un id ne doit
   plus jamais changer ensuite ; préfixe-le par ton nom GitHub, par ex. `cbrutti-mix-pilot`).
 

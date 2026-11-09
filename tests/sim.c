@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "azmod-mod.h"
+#include "pdbgen.h"
 
 const az_mod_v1 *az_mod_v1_entry(void);
 
@@ -335,6 +336,23 @@ int main(void)
     row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
     CHECK(screen_has("Lingua") && screen_has("Italiano") && screen_has("Seguici") && screen_has("Modalita"));
     no_accents();
+
+    /* the user's stick: the service gives nothing, the library is in the hidden .PIONEER folder;
+     * the mod reads its export.pdb (a synthetic one: 20 tracks) after Reload library */
+    {
+        pdbgen g = pg_build();
+        FILE *pf = fopen(FAKE "/media/usb/sdy1/.PIONEER/rekordbox/export.pdb", "wb");
+        CHECK(pf != NULL);
+        if (pf) { fwrite(g.b, 1, g.len, pf); fclose(pf); }
+        free(g.b);
+        __atomic_store_n(&lib_ready, 0, __ATOMIC_RELEASE);
+        row_screen->on_input(&knob, row_screen->user);    /* Language -> Reload library */
+        row_screen->on_input(&click, row_screen->user);
+        run(2.5);
+        paint();
+        dump("library from the hidden export.pdb");
+        CHECK(screen_has("20 brani (pdb)"));               /* Italian is still on: "20 tracks (pdb)" */
+    }
 
     printf("sim: %s\n", fails ? "FAILED" : "all checks passed");
     return fails != 0;

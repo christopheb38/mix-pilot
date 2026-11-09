@@ -38,6 +38,7 @@
 #include "azmod-mod.h"
 #include "engine.h"
 #include "online.h"
+#include "pdb.h"
 
 #define MOD_ID "mix-pilot"
 #define NDECKS 4
@@ -524,15 +525,136 @@ static void diagnose(void)
     tlog("sticks: %s (code %d)", out[0] ? out : "none mounted", code);
 }
 
+/* ---- export.pdb: the library when the core's service has none ------------------------------
+ * The service reads PIONEER/rekordbox/exportLibrary.db only. rekordbox can keep the library in
+ * the hidden .PIONEER/rekordbox folder instead, beside an export.pdb we can read ourselves
+ * (pdb.c). Worker thread only. */
+
+static atomic_int g_from_pdb;    /* 1 = the library came from export.pdb */
+
+struct pdb_ctx {
+    nt_lib *L;
+    int stick, plbase, npl, last;
+    uint32_t plid[1024];
+    char plname[1024][48];
+};
+
+static int pdb_on_track(const pdb_track *t, void *u)
+{
+    struct pdb_ctx *c = u;
+    int i = nt_lib_add(c->L, c->stick, t->id, t->title, t->artist, t->album, t->key, t->bpm, t->len_s);
+    if (i >= 0) nt_set_genre(c->L, i, t->genre);
+    return c->L->n >= c->L->cap;
+}
+
+static int pdb_on_playlist(uint32_t id, uint32_t parent, const char *name, int folder, void *u)
+{
+    (void)parent;
+    struct pdb_ctx *c = u;
+    if (folder || c->npl >= 1024 || c->plbase + c->npl >= 4096) return 0;
+    c->plid[c->npl] = id;
+    snprintf(c->plname[c->npl], sizeof c->plname[0], "%s", name);
+    c->npl++;
+    return 0;
+}
+
+static int pdb_on_entry(uint32_t playlist, uint32_t track, uint32_t index, void *u)
+{
+    (void)index;
+    struct pdb_ctx *c = u;
+    int j = c->last;                                  /* entries come grouped by playlist */
+    if (j < 0 || j >= c->npl || c->plid[j] != playlist)
+        for (j = 0; j < c->npl && c->plid[j] != playlist; j++) {}
+    if (j >= c->npl) return 0;
+    c->last = j;
+    nt_lib_in_playlist(c->L, nt_find(c->L, c->stick, track, 0), c->plbase + j, c->plname[j]);
+    return 0;
+}
+
+/* Reads a whole file (at most max bytes) into a malloc'd buffer. 0 = done. */
+static int read_file(const char *path, unsigned char **buf, size_t *len, size_t max)
+{
+    *buf = NULL;
+    *len = 0;
+    FILE *f = fopen(path, "re");
+    if (!f) return -1;
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || st.st_size <= 0 || (size_t)st.st_size > max) {
+        fclose(f);
+        return -1;
+    }
+    unsigned char *b = malloc((size_t)st.st_size);
+    size_t n = b ? fread(b, 1, (size_t)st.st_size, f) : 0;
+    fclose(f);
+    if (!b || n != (size_t)st.st_size) {
+        free(b);
+        return -1;
+    }
+    *buf = b;
+    *len = n;
+    return 0;
+}
+
+/* For each stick the service gave nothing for (have[stick] == 0): read its export.pdb. */
+static void load_pdb_sticks(nt_lib *L, int *plbase, int have[2])
+{
+    FILE *f = fopen(MP_MOUNTS, "re");
+    if (!f) return;
+    struct pdb_ctx *c = malloc(sizeof *c);
+    if (!c) {
+        fclose(f);
+        return;
+    }
+    char line[512];
+    static char real[PATH_MAX];                       /* realpath() needs PATH_MAX (fortify) */
+    while (fgets(line, sizeof line, f)) {
+        char dev[128], mp[400], sys[300], p[600];
+        if (sscanf(line, "%127s %399s", dev, mp) != 2 || strncmp(dev, "/dev/", 5) != 0 ||
+            strncmp(mp, MP_MEDIA, strlen(MP_MEDIA)) != 0)
+            continue;
+        snprintf(sys, sizeof sys, "%s/%s", MP_SYSBLOCK, dev + 5);
+        int port = realpath(sys, real) ? port_of_sysfs(real) : 0;
+        int stick = port ? port - 1 : !have[0] ? 0 : !have[1] ? 1 : -1;   /* unknown port: a free slot */
+        if (stick < 0 || stick > 1 || have[stick]) continue;
+        static const char *const dirs[] = { "PIONEER", ".PIONEER" };
+        for (int d = 0; d < 2; d++) {
+            snprintf(p, sizeof p, "%s/%s/rekordbox/export.pdb", mp, dirs[d]);
+            unsigned char *buf;
+            size_t len;
+            if (read_file(p, &buf, &len, (size_t)256 << 20) != 0) continue;
+            memset(c, 0, sizeof *c);
+            c->L = L;
+            c->stick = stick;
+            c->plbase = *plbase;
+            c->last = -1;
+            int before = L->n, n = pdb_read(buf, len, pdb_on_track, pdb_on_playlist, pdb_on_entry, c);
+            free(buf);
+            tlog("USB %d: %s/rekordbox/export.pdb -> %d tracks (%d new), %d playlists", stick + 1, dirs[d], n,
+                 L->n - before, c->npl);
+            if (n > 0) {
+                *plbase += c->npl;
+                have[stick] = 1;
+                atomic_store(&g_from_pdb, 1);
+                break;
+            }
+        }
+    }
+    free(c);
+    fclose(f);
+}
+
 static int build_library(nt_lib *L)
 {
     if (nt_lib_init(L, NT_MAX_TRACKS)) return -1;
     struct pl_list *pls = malloc(sizeof *pls);
     if (!pls) return -1;
-    int plbase = 0;
+    int plbase = 0, have[2] = { 0, 0 };
+    atomic_store(&g_from_pdb, 0);
     for (int stick = 0; stick < 2; stick++) {
         struct add_ctx a = { L, stick, 0, "" };
+        int before = L->n;
         int rt = C->lib_tracks(MOD_ID, stick, 0, on_track_all, &a);
+        have[stick] = rt >= 0 && L->n > before;
         pls->n = 0;
         int rp = C->lib_playlists(MOD_ID, stick, on_playlist, pls);
         atomic_store(&g_rc[stick][0], rt);
@@ -548,6 +670,7 @@ static int build_library(nt_lib *L)
         plbase += pls->n;
     }
     free(pls);
+    if (!have[0] || !have[1]) load_pdb_sticks(L, &plbase, have);
     if (!L->n) diagnose();
     const char *dir = data_dir(), *assets = assets_dir();
     char p[512];
@@ -631,7 +754,7 @@ static void status_line(char *s, size_t n, const nt_lib *L)
     char a[48], b[64];
     snprintf(a, sizeof a, tr(T_TRACKS), L->n);
     snprintf(b, sizeof b, tr(T_KNOWN), L->pairs.n);
-    snprintf(s, n, "%s  -  %s%s%s", a, b, net[0] ? "  -  " : "", net);
+    snprintf(s, n, "%s%s  -  %s%s%s", a, atomic_load(&g_from_pdb) ? " (pdb)" : "", b, net[0] ? "  -  " : "", net);
 }
 
 /* One line of reasons, in the chosen language: "8A>9A  -0.8%  house  mixed 3x". */

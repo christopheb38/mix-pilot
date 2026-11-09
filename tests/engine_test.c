@@ -6,6 +6,8 @@
 
 #include "../engine.h"
 #include "../minijson.h"
+#include "../pdb.h"
+#include "pdbgen.h"
 
 static int fails, checks;
 #define CHECK(c)                                                                   \
@@ -125,6 +127,14 @@ static void ranking(void)
     for (int i = 0; i < n; i++)
         if (out[i] == known) CHECK(why[i].pair_count == 3);
 
+    /* a song in the library twice (two ids) is suggested once */
+    int twin = nt_lib_add(&L, 0, 99, "Next Good", "DJ Two", "", "Em", 125, 360);
+    CHECK(twin >= 0 && twin != good);
+    n = nt_rank(&L, &c, a, 0, 5, out, why);
+    int copies = 0;
+    for (int i = 0; i < n; i++) copies += L.t[out[i]].ident == L.t[good].ident;
+    CHECK(copies == 1);
+
     /* excluded tracks never come back */
     uint8_t ex[100] = { 0 };
     ex[known] = 1;
@@ -223,6 +233,87 @@ static void json(void)
     mj_free(&d);
 }
 
+/* ---- export.pdb ---------------------------------------------------------------------- */
+
+struct pdbseen {
+    int ntr, npl, nfold, nent, latino_entries;
+    char t5_artist[64], t3_artist[64], t1_genre[32], t2_key[8];
+    double t20_bpm;
+    int t20_len;
+};
+
+static int seen_track(const pdb_track *t, void *u)
+{
+    struct pdbseen *s = u;
+    s->ntr++;
+    if (t->id == 5) snprintf(s->t5_artist, sizeof s->t5_artist, "%s", t->artist);
+    if (t->id == 3) snprintf(s->t3_artist, sizeof s->t3_artist, "%s", t->artist);
+    if (t->id == 1) snprintf(s->t1_genre, sizeof s->t1_genre, "%s", t->genre);
+    if (t->id == 2) snprintf(s->t2_key, sizeof s->t2_key, "%s", t->key);
+    if (t->id == 20) { s->t20_bpm = t->bpm; s->t20_len = t->len_s; }
+    return 0;
+}
+
+static int seen_pl(uint32_t id, uint32_t parent, const char *name, int folder, void *u)
+{
+    struct pdbseen *s = u;
+    (void)id;
+    if (folder) { s->nfold++; CHECK(strcmp(name, "STYLE") == 0 && parent == 0); }
+    else { s->npl++; CHECK(parent == 1); }
+    return 0;
+}
+
+static int seen_entry(uint32_t pl, uint32_t tr, uint32_t idx, void *u)
+{
+    struct pdbseen *s = u;
+    (void)tr; (void)idx;
+    s->nent++;
+    if (pl == 2) s->latino_entries++;
+    return 0;
+}
+
+static int count_only(const pdb_track *t, void *u) { (void)t; (*(int *)u)++; return 0; }
+
+static void pdbfile(void)
+{
+    pdbgen g = pg_build();
+    struct pdbseen s;
+    memset(&s, 0, sizeof s);
+    CHECK(pdb_read(g.b, g.len, seen_track, seen_pl, seen_entry, &s) == 20);
+    CHECK(s.ntr == 20);                                    /* both row groups */
+    CHECK(strcmp(s.t5_artist, "J Balvin") == 0);           /* far name offset */
+    CHECK(strcmp(s.t3_artist, "Beyonc\xc3\xa9") == 0);   /* UTF-16 to UTF-8 */
+    CHECK(strcmp(s.t1_genre, "Reggaeton") == 0 && strcmp(s.t2_key, "Em") == 0);
+    CHECK(fabs(s.t20_bpm - 129.5) < 1e-9 && s.t20_len == 219);
+    CHECK(s.nfold == 1 && s.npl == 2 && s.nent == 20 && s.latino_entries == 10);
+
+    /* not a pdb */
+    CHECK(pdb_read(g.b, 100, NULL, NULL, NULL, NULL) == -1);
+    unsigned char junk[8192] = { 1, 2, 3 };
+    CHECK(pdb_read(junk, sizeof junk, NULL, NULL, NULL, NULL) == -1);
+
+    /* damaged files never read outside the buffer (ASan watches): flip random bytes */
+    unsigned seed = 12345;
+    unsigned char *copy = malloc(g.len);
+    for (int round = 0; round < 3000; round++) {
+        memcpy(copy, g.b, g.len);
+        int flips = 1 + round % 24;
+        for (int k = 0; k < flips; k++) {
+            seed = seed * 1103515245u + 12345u;
+            size_t at = (seed >> 8) % g.len;
+            seed = seed * 1103515245u + 12345u;
+            copy[at] = (unsigned char)(seed >> 16);
+        }
+        int n = 0;
+        pdb_read(copy, g.len, count_only, NULL, NULL, &n);
+        CHECK(n >= 0 && n <= 8 * 2000);              /* garbage row counts stay inside their page */
+    }
+    /* a truncated file too */
+    for (size_t cut = 0; cut < g.len; cut += 509) pdb_read(g.b, cut, NULL, NULL, NULL, NULL);
+    free(copy);
+    free(g.b);
+}
+
 int main(void)
 {
     keys();
@@ -233,6 +324,7 @@ int main(void)
     energy();
     big();
     json();
+    pdbfile();
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

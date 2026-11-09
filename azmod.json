@@ -2,7 +2,7 @@
   "azmod": 1,
   "id": "mix-pilot",
   "name": "Mix Pilot",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "author": "christopheb38",
   "summary": "Next-track suggestions: what mixes best after the playing track, by key, tempo, style and real DJ transitions.",
   "description": "Shows the tracks that mix best after the playing one, on BROWSE and SEARCH and in the Mod Menu: the best next tracks, or a chain where each track mixes into the next. It scores key (Camelot), tempo, style (Last.fm tags, shared playlists) and transitions DJs really play: yours, learned as you mix, and a community pairings file.\n\nReads deck state and the USB library (read-only), writes its own files in its USB data folder, and uses WiFi for Last.fm and an optional pairings URL. No code patches, no change to controls, LEDs or audio.",

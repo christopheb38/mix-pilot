@@ -31,7 +31,7 @@
 # otherwise exported, which the deck refuses. A C-only build is unchanged by any of this.
 
 MOD_ID          := mix-pilot
-SRCS            := mix-pilot.c engine.c online.c minijson.c
+SRCS            := mix-pilot.c engine.c online.c minijson.c pdb.c
 AZ_SDK_INCLUDE  ?= ../include
 AZ_SDK          ?= ..
 MAX_REDRAWS     ?= 8          # the most repaints a second your tick asks for
@@ -112,7 +112,7 @@ clean:
 engine-test:
 	@mkdir -p $(OUT)
 	$(TEST_CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
-	    -o $(OUT)/engine_test tests/engine_test.c engine.c minijson.c -lm
+	    -o $(OUT)/engine_test tests/engine_test.c engine.c minijson.c pdb.c -lm
 	$(OUT)/engine_test
 
 SIM_FLAGS := -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
@@ -136,3 +136,9 @@ sim-fortify:
 	    -fsanitize=address,undefined -fno-omit-frame-pointer $(SIM_FLAGS) \
 	    -I$(AZ_SDK_INCLUDE) -o $(OUT)/sim-fortify tests/sim.c $(SRCS) -lm -lpthread
 	$(OUT)/sim-fortify
+
+# Print what pdb.c reads from an export.pdb:  make pdbdump && out/pdbdump path/to/export.pdb
+.PHONY: pdbdump
+pdbdump:
+	@mkdir -p $(OUT)
+	$(TEST_CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined -o $(OUT)/pdbdump tests/pdbdump.c pdb.c

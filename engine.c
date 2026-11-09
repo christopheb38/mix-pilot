@@ -443,6 +443,13 @@ int nt_tag_index(nt_lib *L, const char *tag)
     return L->ntags++;
 }
 
+void nt_set_genre(nt_lib *L, int i, const char *genre)
+{
+    if (i < 0 || i >= L->n || !genre || !genre[0]) return;
+    int ix = nt_tag_index(L, genre);
+    if (ix >= 0) L->t[i].genre = (uint16_t)(ix + 1);
+}
+
 void nt_set_tags(nt_lib *L, uint32_t ident, const int *tag, const int *w, int n)
 {
     if (n > NT_TRACK_TAGS) n = NT_TRACK_TAGS;
@@ -462,18 +469,37 @@ void nt_set_tags(nt_lib *L, uint32_t ident, const int *tag, const int *w, int n)
 
 /* ---- scoring ------------------------------------------------------------------------- */
 
+/* A track's style vector: its web tags plus its rekordbox genre (weight 100) when that genre
+ * is not already one of the tags. Returns the count (at most NT_TRACK_TAGS + 1). */
+static int style_vec(const nt_track *t, int *tag, float *w)
+{
+    int n = 0, has_genre = 0;
+    for (int i = 0; i < t->ntags; i++) {
+        tag[n] = t->tag[i];
+        w[n++] = t->tagw[i];
+        if (t->genre && t->tag[i] == t->genre - 1) has_genre = 1;
+    }
+    if (t->genre && !has_genre) {
+        tag[n] = t->genre - 1;
+        w[n++] = 100;
+    }
+    return n;
+}
+
 static float tag_cosine(const nt_track *a, const nt_track *b, int *best)
 {
-    float dot = 0, na = 0, nb = 0, top = 0;
+    int ta[NT_TRACK_TAGS + 1], tb[NT_TRACK_TAGS + 1];
+    float wa[NT_TRACK_TAGS + 1], wb[NT_TRACK_TAGS + 1], dot = 0, na = 0, nb = 0, top = 0;
+    int ka = style_vec(a, ta, wa), kb = style_vec(b, tb, wb);
     *best = -1;
-    for (int i = 0; i < a->ntags; i++) na += (float)a->tagw[i] * a->tagw[i];
-    for (int j = 0; j < b->ntags; j++) nb += (float)b->tagw[j] * b->tagw[j];
-    for (int i = 0; i < a->ntags; i++)
-        for (int j = 0; j < b->ntags; j++)
-            if (a->tag[i] == b->tag[j]) {
-                float p = (float)a->tagw[i] * b->tagw[j];
+    for (int i = 0; i < ka; i++) na += wa[i] * wa[i];
+    for (int j = 0; j < kb; j++) nb += wb[j] * wb[j];
+    for (int i = 0; i < ka; i++)
+        for (int j = 0; j < kb; j++)
+            if (ta[i] == tb[j]) {
+                float p = wa[i] * wb[j];
                 dot += p;
-                if (p > top) { top = p; *best = a->tag[i]; }
+                if (p > top) { top = p; *best = ta[i]; }
             }
     if (na <= 0 || nb <= 0) return 0;
     return dot / sqrtf(na * nb);
@@ -521,7 +547,7 @@ float nt_score(const nt_lib *L, const nt_ctx *c, int from, double from_bpm, int 
 
     r->key = nt_key_score(a->camelot, b->camelot, &r->step);
 
-    float cos = (a->ntags && b->ntags) ? tag_cosine(a, b, &r->shared_tag) : -1;
+    float cos = ((a->ntags || a->genre) && (b->ntags || b->genre)) ? tag_cosine(a, b, &r->shared_tag) : -1;
     float pl = playlist_overlap(L, a, b);
     if (cos >= 0 && pl >= 0) r->style = 0.65f * cos + 0.35f * fminf(1.0f, pl * 1.5f);
     else if (cos >= 0) r->style = cos;
@@ -573,6 +599,15 @@ static int rank_ex(const nt_lib *L, const nt_ctx *c, const uint8_t *ex, int from
         float s = nt_score(L, c, from, from_bpm, i, &r);
         if (s <= 0) continue;
         if (n == k && s <= why[k - 1].total) continue;
+        /* the same song twice (a duplicate in the library, or on both sticks): keep the better */
+        int dup = -1;
+        for (int j = 0; j < n; j++)
+            if (L->t[out[j]].ident == L->t[i].ident) { dup = j; break; }
+        if (dup >= 0) {
+            if (why[dup].total >= s) continue;
+            for (int j = dup; j + 1 < n; j++) { out[j] = out[j + 1]; why[j] = why[j + 1]; }
+            n--;
+        }
         insert_top(out, why, &n, k, i, &r);
     }
     return n;
