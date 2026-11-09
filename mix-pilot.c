@@ -23,6 +23,7 @@
  * Files, all on the USB in data_dir(): config.txt (API key, pairings URL), my-transitions.tsv
  * (what you mixed), community.tsv (downloaded pairings), lastfm-cache.tsv (web answers).
  */
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -400,25 +401,40 @@ static int port_of_sysfs(const char *real)
     return 0;
 }
 
+/* Where the deck lists its mounts, mounts its sticks and describes block devices (the core's
+ * own paths, sdk_lib.c); the host simulation points them at a fake stick. */
+#ifndef MP_MOUNTS
+#define MP_MOUNTS "/proc/mounts"
+#endif
+#ifndef MP_MEDIA
+#define MP_MEDIA "/media/usb"
+#endif
+#ifndef MP_SYSBLOCK
+#define MP_SYSBLOCK "/sys/class/block"
+#endif
+
 /* When the core reads no library: look at the sticks ourselves and say why, in plain words. */
 static void diagnose(void)
 {
     char out[96] = "";
     int code = 1, o = 0;
-    FILE *f = fopen("/proc/mounts", "re");
+    FILE *f = fopen(MP_MOUNTS, "re");
     if (f) {
         char line[512];
         while (fgets(line, sizeof line, f)) {
             char dev[128], mp[400];
             if (sscanf(line, "%127s %399s", dev, mp) != 2 || strncmp(dev, "/dev/", 5) != 0 ||
-                strncmp(mp, "/media/usb", 10) != 0)
+                strncmp(mp, MP_MEDIA, strlen(MP_MEDIA)) != 0)
                 continue;
-            char p[600], sys[300], real[600];
+            /* realpath() needs a PATH_MAX buffer: with _FORTIFY_SOURCE (on by default in the SDK's
+             * GCC) a smaller one aborts EP147 (that was the 0.3.0 crash) */
+            static char real[PATH_MAX];
+            char p[600], sys[300];
             snprintf(p, sizeof p, "%s/PIONEER/rekordbox/exportLibrary.db", mp);
             int db = access(p, R_OK) == 0;
             snprintf(p, sizeof p, "%s/PIONEER/rekordbox/export.pdb", mp);
             int pdb = access(p, R_OK) == 0;
-            snprintf(sys, sizeof sys, "/sys/class/block/%s", dev + 5);
+            snprintf(sys, sizeof sys, "%s/%s", MP_SYSBLOCK, dev + 5);
             int port = realpath(sys, real) ? port_of_sysfs(real) : 0;
             int c = db ? (port ? 4 : 3) : pdb ? 2 : 1;
             if (c > code || code == 1) code = c > code ? c : code;
@@ -432,7 +448,7 @@ static void diagnose(void)
     snprintf(g_diag, sizeof g_diag, "%s", out);
     pthread_mutex_unlock(&g_diag_mu);
     atomic_store(&g_diag_code, code);
-    C->log(MOD_ID, "sticks: %s (code %d)", out[0] ? out : "none under /media/usb", code);
+    C->log(MOD_ID, "sticks: %s (code %d)", out[0] ? out : "none mounted", code);
 }
 
 static int build_library(nt_lib *L)
@@ -1289,7 +1305,7 @@ static void draw_credits(az_draw *d, az_rect a, int px)
     int y = a.y + a.h - 2 * lh - pad / 2;
     C->fill_rect(d, a.x + pad, y - pad / 2, a.w - 2 * pad, 1, C->color(AZ_COL_TEXT_DIM));
     text(d, a.x + pad, y, a.w - 2 * pad, tr(T_LOVE), px, C->color(AZ_COL_TEXT));
-    text(d, a.x + pad, y + lh, a.w - 2 * pad, "@blinkevent38    @christopheb_38", px, C->color(AZ_COL_HI));
+    text(d, a.x + pad, y + lh, a.w - 2 * pad, "@blinkevents38    @christopheb_38", px, C->color(AZ_COL_HI));
 }
 
 static void page_draw(az_draw *d, az_rect area, void *user)

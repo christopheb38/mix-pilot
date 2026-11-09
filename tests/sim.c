@@ -187,8 +187,23 @@ static void dump(const char *when)
     for (int i = 0; i < nscreen; i++) printf("  | %s\n", screen_text[i]);
 }
 
+/* A fake stick for the USB diagnostic: a mounts file, a mount point holding only export.pdb,
+ * and a sysfs link that puts the device in the USB 1 port (bus 1-1). */
+#define FAKE "/tmp/mixpilot-fake"
+static void make_fake_stick(void)
+{
+    int rc = system("rm -rf " FAKE " && mkdir -p " FAKE "/media/usb/sdz1/PIONEER/rekordbox " FAKE
+                    "/sys/class/block " FAKE "/sys/devices/soc/usb1/1-1/1-1:1.0/host0/target0/block/sdz1"
+                    " && touch " FAKE "/media/usb/sdz1/PIONEER/rekordbox/export.pdb"
+                    " && ln -s " FAKE "/sys/devices/soc/usb1/1-1/1-1:1.0/host0/target0/block/sdz1 " FAKE
+                    "/sys/class/block/sdz1"
+                    " && echo '/dev/sdz1 " FAKE "/media/usb/sdz1 vfat rw 0 0' > " FAKE "/mounts");
+    if (rc != 0) { fails++; fprintf(stderr, "sim: could not build the fake stick\n"); }
+}
+
 int main(void)
 {
+    make_fake_stick();
     snprintf(dir, sizeof dir, "/tmp/mixpilot-sim-%d", (int)getpid());
     mkdir(dir, 0755);
     CORE = (az_core_v1){ .abi = AZ_MOD_ABI, .size = sizeof(az_core_v1), .log = logf_, .register_screen = register_screen,
@@ -205,7 +220,7 @@ int main(void)
     CHECK(nrows == 1 && row_screen != NULL);            /* one row in the Mod Menu, opening our page */
     run(1.0);
     dump("stick not readable yet");
-    CHECK(screen_has("The deck sees no USB stick") && screen_has("USB1 -1/-1"));   /* no /proc/mounts on a Mac */
+    CHECK(screen_has("No exportLibrary.db") && screen_has("USB1 -1/-1") && screen_has("sdz1:pdb p1"));   /* the fake stick */
     __atomic_store_n(&lib_ready, 1, __ATOMIC_RELEASE);  /* the stick becomes readable */
     run(2.5);
     dump("empty decks");
@@ -218,7 +233,7 @@ int main(void)
     printf("--- page\n");
     for (int i = 0; i < nscreen; i++) printf("  | %s\n", screen_text[i]);
     CHECK(screen_has("Energy") && screen_has("Smooth") && screen_has("Follow"));
-    CHECK(screen_has("@blinkevent38") && screen_has("@christopheb_38") && screen_has("Follow us"));
+    CHECK(screen_has("@blinkevents38") && screen_has("@christopheb_38") && screen_has("Follow us"));
     CHECK(screen_has("Language") && screen_has("English"));
 
     pthread_mutex_lock(&mu);
@@ -298,6 +313,12 @@ int main(void)
     paint();
     dump("in French");
     CHECK(screen_has("Plan apr") && screen_has("Stable") && screen_has("Monter"));
+
+    /* three more clicks on Language: Espanol, Deutsch, Italiano */
+    for (int i = 0; i < 3; i++) row_screen->on_input(&click, row_screen->user);
+    nscreen = 0;
+    row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+    CHECK(screen_has("Lingua") && screen_has("Italiano") && screen_has("Seguici"));
 
     printf("sim: %s\n", fails ? "FAILED" : "all checks passed");
     return fails != 0;

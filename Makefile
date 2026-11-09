@@ -115,10 +115,24 @@ engine-test:
 	    -o $(OUT)/engine_test tests/engine_test.c engine.c minijson.c -lm
 	$(OUT)/engine_test
 
+SIM_FLAGS := -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
+    -DMP_MOUNTS='"/tmp/mixpilot-fake/mounts"' -DMP_MEDIA='"/tmp/mixpilot-fake/media/usb"' \
+    -DMP_SYSBLOCK='"/tmp/mixpilot-fake/sys/class/block"'
+
 # End-to-end simulation on the host: a fake core, library and decks (short timings).
 .PHONY: sim
 sim:
 	@mkdir -p $(OUT)
-	$(TEST_CC) -std=gnu11 -O1 -g -Wall -Wextra -fsanitize=thread -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
+	$(TEST_CC) -std=gnu11 -O1 -g -Wall -Wextra -fsanitize=thread $(SIM_FLAGS) \
 	    -I$(AZ_SDK_INCLUDE) -o $(OUT)/sim tests/sim.c $(SRCS) -lm -lpthread
 	$(OUT)/sim
+
+# The same simulation built like the deck build: -O2 and _FORTIFY_SOURCE=2 (on by default in the
+# SDK's GCC), plus AddressSanitizer. On Linux with GCC this catches what fortify aborts on.
+.PHONY: sim-fortify
+sim-fortify:
+	@mkdir -p $(OUT)
+	$(TEST_CC) -std=gnu11 -O2 -g -Wall -Wextra -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 \
+	    -fsanitize=address,undefined -fno-omit-frame-pointer $(SIM_FLAGS) \
+	    -I$(AZ_SDK_INCLUDE) -o $(OUT)/sim-fortify tests/sim.c $(SRCS) -lm -lpthread
+	$(OUT)/sim-fortify

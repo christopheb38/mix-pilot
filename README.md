@@ -144,7 +144,7 @@ pour choisir une ligne, clique (ou touche-la) pour changer sa valeur, BACK pour 
 | Avoid same artist | baisse un peu les autres morceaux du même artiste |
 | Learn my transitions | enregistre tes enchaînements |
 | Online (Last.fm) | coupe tout accès réseau |
-| Language | English, Français, Español, Deutsch |
+| Language | English, Français, Español, Deutsch, Italiano |
 | Reload library | relit la clé, `config.txt` et les fichiers d'enchaînements |
 
 ## Développement
@@ -191,7 +191,7 @@ Last.fm (au plus ~5 requêtes/s, pause de 30 s si le réseau tombe).
 
 Vous aimez Mix Pilot ? Suivez-nous sur Instagram ! · Love Mix Pilot? Follow us on Instagram!
 
-[@blinkevent38](https://www.instagram.com/blinkevent38/) ·
+[@blinkevents38](https://www.instagram.com/blinkevents38/) ·
 [@christopheb_38](https://www.instagram.com/christopheb_38/)
 
 ## Licence
