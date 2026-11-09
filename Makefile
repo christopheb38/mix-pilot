@@ -119,6 +119,6 @@ engine-test:
 .PHONY: sim
 sim:
 	@mkdir -p $(OUT)
-	$(TEST_CC) -std=gnu11 -O1 -g -Wall -Wextra -fsanitize=thread -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 \
+	$(TEST_CC) -std=gnu11 -O1 -g -Wall -Wextra -fsanitize=thread -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
 	    -I$(AZ_SDK_INCLUDE) -o $(OUT)/sim tests/sim.c $(SRCS) -lm -lpthread
 	$(OUT)/sim

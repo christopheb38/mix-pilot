@@ -48,10 +48,12 @@ static const struct t LIB[] = {
 };
 #define NLIB ((int)(sizeof LIB / sizeof LIB[0]))
 
+static int lib_ready;   /* 0 = the stick is not readable yet (as at boot) */
+
 static int lib_playlists(const char *id, int stick, int (*fn)(int, int, const char *, int, void *), void *u)
 {
     (void)id;
-    if (stick) return -1;
+    if (stick || !__atomic_load_n(&lib_ready, __ATOMIC_ACQUIRE)) return -1;
     fn(1, 0, "Deep House", 0, u);
     fn(2, 0, "Peak", 0, u);
     fn(3, 0, "Chill", 0, u);
@@ -61,7 +63,7 @@ static int lib_playlists(const char *id, int stick, int (*fn)(int, int, const ch
 static int lib_tracks(const char *id, int stick, int pl, int (*fn)(const az_track *, void *), void *u)
 {
     (void)id;
-    if (stick) return -1;
+    if (stick || !__atomic_load_n(&lib_ready, __ATOMIC_ACQUIRE)) return -1;
     for (int i = 0; i < NLIB; i++) {
         if (pl && LIB[i].pl != pl) continue;
         az_track t = { sizeof t, LIB[i].id, LIB[i].title, LIB[i].artist, "", LIB[i].key, "/x.mp3", LIB[i].bpm, 300 };
@@ -97,9 +99,14 @@ static int on_deck_event(const char *id, void (*fn)(int, int, void *), void *u) 
 
 /* ---- rows -------------------------------------------------------------------------------- */
 static int rowv[16], nrows;
+static const az_screen_v1 *row_screen;
+static int cfg[16];
+static int cfg_get(const char *id, const char *key, int def) { (void)id; (void)key; return def; }
+static void cfg_set(const char *id, const char *key, int v) { (void)id; (void)key; (void)v; cfg[0]++; }
 static int register_row(const char *id, const az_row_v1 *r)
 {
     (void)id;
+    if (r->kind == AZ_ROW_SCREEN) row_screen = r->screen;
     rowv[nrows] = r->kind == AZ_ROW_CHOICE ? r->default_choice : (r->flags & AZ_ROW_DEFAULT_ON) ? 1 : 0;
     return nrows++;
 }
@@ -187,17 +194,30 @@ int main(void)
                          .draw_header = draw_header, .draw_text = draw_text, .fill_rect = fill_rect, .color = color,
                          .row_height = row_height, .text_width = text_width, .request_redraw = request_redraw,
                          .deck_count = deck_count, .data_dir = data_dir, .assets_dir = no_assets,
-                         .register_row = register_row, .row_value = row_value, .row_set = row_set,
+                         .register_row = register_row, .cfg_get = cfg_get, .cfg_set = cfg_set, .row_value = row_value, .row_set = row_set,
                          .lib_playlists = lib_playlists, .lib_tracks = lib_tracks, .view = view,
                          .surface_create = surface_create, .surface_place = surface_place,
                          .surface_show = surface_show, .surface_redraw = surface_redraw, .deck_info = deck_info,
                          .on_deck_event = on_deck_event, .banner = banner, .thread_start = thread_start };
     const az_mod_v1 *m = az_mod_v1_entry();
     CHECK(m->init(&CORE) == 0);
-    CHECK(nrows >= 9);
+    CHECK(nrows == 1 && row_screen != NULL);            /* one row in the Mod Menu, opening our page */
     run(1.0);
+    dump("stick not readable yet");
+    CHECK(screen_has("No rekordbox library yet") && screen_has("USB1 -1/-1"));
+    __atomic_store_n(&lib_ready, 1, __ATOMIC_RELEASE);  /* the stick becomes readable */
+    run(2.5);
     dump("empty decks");
     CHECK(screen_has("Play a track"));
+    CHECK(screen_has("30 tracks"));
+
+    /* the page: settings and the credits */
+    nscreen = 0;
+    row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+    printf("--- page\n");
+    for (int i = 0; i < nscreen; i++) printf("  | %s\n", screen_text[i]);
+    CHECK(screen_has("Energy") && screen_has("Smooth") && screen_has("Follow"));
+    CHECK(screen_has("@blinkevent38") && screen_has("Suivez-nous"));
 
     pthread_mutex_lock(&mu);
     D[0].loaded = 1; D[0].lib = 0; D[0].playing = 1;      /* Opening Groove, Am 122 */
@@ -240,7 +260,9 @@ int main(void)
     D[0].loaded = 0; D[0].playing = 0;
     pthread_mutex_unlock(&mu);
     /* the session's played list still excludes Second Wind; check the score path instead */
-    row_set(2, 1);                                          /* rows: group, panel, mode -> Chain */
+    az_event tap = { AZ_EV_TAP, 0, 900, 100 };
+    CHECK(surf.on_input(&tap, surf.user) == 1);            /* a tap on the panel: Chain */
+    CHECK(cfg[0] > 0);                                      /* the setting was saved */
     run(2.0);
     dump("chain after Opening Groove (deck 2)");
     CHECK(screen_has("Plan after D2: Opening Groove"));

@@ -104,10 +104,14 @@ tempo, playlists, tes enchaînements, fichier communautaire). Les réponses de L
 en cache sur la clé (`lastfm-cache.tsv`), donc un morceau déjà vu reste enrichi hors ligne en
 soirée.
 
-## Réglages (Mod Menu)
+## Réglages
+
+Une seule ligne **Mix Pilot** dans le Mod Menu : elle ouvre la page du mod. Tourne la molette
+pour choisir une ligne, clique (ou touche-la) pour changer sa valeur, BACK pour revenir.
 
 | Ligne | Effet |
 |---|---|
+| Show suggestions | la liste en plein écran (clic : Next / Chain) |
 | Panel | Right / Left / Off. Appui long sur le panneau : le replier |
 | Mode | Next tracks / Chain |
 | Tracks shown | 4, 5, 8, 10 |
@@ -116,7 +120,6 @@ soirée.
 | Avoid same artist | baisse un peu les autres morceaux du même artiste |
 | Learn my transitions | enregistre tes enchaînements |
 | Online (Last.fm) | coupe tout accès réseau |
-| Suggestions | la page plein écran |
 | Reload library | relit la clé, `config.txt` et les fichiers d'enchaînements |
 
 ## Développement
@@ -147,7 +150,7 @@ Last.fm (au plus ~5 requêtes/s, pause de 30 s si le réseau tombe).
 
 ## À savoir / limites (v0.1, bêta)
 
-- **Pas encore testé sur un vrai deck.** Le moteur, la simulation et le harnais du SDK passent,
+- **Premiers tests sur deck en cours.** Le moteur, la simulation et le harnais du SDK passent,
   mais l'emplacement du panneau (x = droite ou gauche, y = 90, 470 px de large) est à ajuster
   selon ce qu'il cache sur l'écran BROWSE.
 - Le deck ne fournit pas la tonalité du morceau en cours : elle vient de la bibliothèque
@@ -158,6 +161,13 @@ Last.fm (au plus ~5 requêtes/s, pause de 30 s si le réseau tombe).
   playlists. Lire le genre directement dans `export.pdb` est une piste pour la v0.2.
 - Change l'`id` avant de publier si `mix-pilot` est déjà pris dans le Mod Index (un id ne doit
   plus jamais changer ensuite ; préfixe-le par ton nom GitHub, par ex. `cbrutti-mix-pilot`).
+
+## Suivez-nous / Follow us
+
+Vous aimez Mix Pilot ? Suivez-nous sur Instagram ! · Love Mix Pilot? Follow us on Instagram!
+
+[@blinkevent38](https://www.instagram.com/blinkevent38/) ·
+[@christopheb38](https://www.instagram.com/christopheb38/)
 
 ## Licence
 

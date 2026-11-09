@@ -41,6 +41,9 @@
 #ifndef SETTLE_S
 #define SETTLE_S 40.0           /* a track that played this long counts as played */
 #endif
+#ifndef LIB_RETRY_S
+#define LIB_RETRY_S 10.0        /* an empty library is read again this often */
+#endif
 #ifndef REF_STABLE_S
 #define REF_STABLE_S 6.0        /* a deck must play this long before it becomes the reference */
 #endif
@@ -48,16 +51,46 @@
 
 static const az_core_v1 *C;
 
-/* ---- settings: Mod Menu rows ----------------------------------------------------------- */
+/* ---- settings ---------------------------------------------------------------------------
+ * Kept on the mod's own page (one row in the Mod Menu opens it), saved with cfg_set. Read from
+ * any thread as atomics; changed on the UI thread only. */
 
-static int h_panel = -1, h_mode = -1, h_count = -1, h_flow = -1, h_ref = -1, h_artist = -1,
-           h_online = -1, h_learn = -1;
+enum { S_PANEL, S_MODE, S_COUNT, S_FLOW, S_REF, S_ARTIST, S_LEARN, S_ONLINE, S_N };
+static const char *const C_PANEL[] = { "Right", "Left", "Off" };
+static const char *const C_MODE[] = { "Next tracks", "Chain" };
+static const char *const C_COUNT[] = { "4", "5", "8", "10" };
+static const char *const C_FLOW[] = { "Smooth", "Build up", "Cool down" };
+static const char *const C_REF[] = { "Auto", "Deck 1", "Deck 2", "Deck 3", "Deck 4" };
+static const char *const C_ONOFF[] = { "Off", "On" };
+static const struct {
+    const char *key, *label;
+    int def, n;
+    const char *const *choices;
+} SET[S_N] = {
+    { "panel", "Panel", 0, 3, C_PANEL },
+    { "mode", "Mode", 0, 2, C_MODE },
+    { "count", "Tracks shown", 1, 4, C_COUNT },
+    { "flow", "Energy", 0, 3, C_FLOW },
+    { "ref", "Follow", 0, 5, C_REF },
+    { "artist", "Avoid same artist", 1, 2, C_ONOFF },
+    { "learn", "Learn my transitions", 1, 2, C_ONOFF },
+    { "online", "Online (Last.fm)", 1, 2, C_ONOFF },
+};
+static atomic_int g_set[S_N];
 static const int COUNTS[] = { 4, 5, 8, 10 };
 
-static int rv(int h, int def)
+static int S(int i)
 {
-    int v = h >= 0 ? C->row_value(h) : -1;
-    return v < 0 ? def : v;
+    return atomic_load(&g_set[i]);
+}
+
+static void load_settings(void)
+{
+    for (int i = 0; i < S_N; i++) {
+        int v = AZ_HAS(C, cfg_get) ? C->cfg_get(MOD_ID, SET[i].key, SET[i].def) : SET[i].def;
+        if (v < 0 || v >= SET[i].n) v = SET[i].def;
+        atomic_store(&g_set[i], v);
+    }
 }
 
 /* ---- UI -> worker -------------------------------------------------------------------- */
@@ -320,6 +353,8 @@ static int on_track_pl(const az_track *t, void *user)
     return 0;
 }
 
+static atomic_int g_rc[2][2];     /* per stick: lib_tracks(all) and lib_playlists results, for the screen */
+
 static int build_library(nt_lib *L)
 {
     if (nt_lib_init(L, NT_MAX_TRACKS)) return -1;
@@ -328,9 +363,13 @@ static int build_library(nt_lib *L)
     int plbase = 0;
     for (int stick = 0; stick < 2; stick++) {
         struct add_ctx a = { L, stick, 0, "" };
-        if (C->lib_tracks(MOD_ID, stick, 0, on_track_all, &a) < 0) continue;   /* no library there */
+        int rt = C->lib_tracks(MOD_ID, stick, 0, on_track_all, &a);
         pls->n = 0;
-        if (C->lib_playlists(MOD_ID, stick, on_playlist, pls) < 0) continue;
+        int rp = C->lib_playlists(MOD_ID, stick, on_playlist, pls);
+        atomic_store(&g_rc[stick][0], rt);
+        atomic_store(&g_rc[stick][1], rp);
+        C->log(MOD_ID, "USB %d: all tracks -> %d (%d so far), playlists -> %d (%d)", stick + 1, rt, L->n, rp, pls->n);
+        if (rp < 0) continue;                             /* tracks only, or no library there */
         for (int i = 0; i < pls->n && plbase + i < 4096; i++) {
             if (pls->folder[i]) continue;
             a.pl = plbase + i;
@@ -414,8 +453,12 @@ static void status_line(char *s, size_t n, const nt_lib *L)
     case 4: net = "  -  Last.fm unreachable"; break;
     default: break;
     }
-    if (!rv(h_online, 1)) net = "  -  online off";
-    snprintf(s, n, "%d tracks  -  %u transitions known%s", L->n, L->pairs.n, net);
+    if (!S(S_ONLINE)) net = "  -  online off";
+    if (!L->n)                                            /* what the core answered, to report */
+        snprintf(s, n, "USB1 %d/%d  USB2 %d/%d", atomic_load(&g_rc[0][0]), atomic_load(&g_rc[0][1]),
+                 atomic_load(&g_rc[1][0]), atomic_load(&g_rc[1][1]));
+    else
+        snprintf(s, n, "%d tracks  -  %u transitions known%s", L->n, L->pairs.n, net);
 }
 
 static void compute(void)
@@ -431,10 +474,10 @@ static void compute(void)
     memcpy(ex, g_ex, sizeof ex[0] * (size_t)nex);
     pthread_mutex_unlock(&g_in_mu);
 
-    int chain = rv(h_mode, 0) == 1;
-    int k = COUNTS[rv(h_count, 1) & 3];
-    nt_ctx ctx = { rv(h_flow, 0), rv(h_artist, 1), NULL };
-    int online = rv(h_online, 1);
+    int chain = S(S_MODE) == 1;
+    int k = COUNTS[S(S_COUNT) & 3];
+    nt_ctx ctx = { S(S_FLOW), S(S_ARTIST), NULL };
+    int online = S(S_ONLINE);
 
     static vrow rows[NT_MAX_RESULTS];
     char head[160], status[128];
@@ -445,7 +488,8 @@ static void compute(void)
     status_line(status, sizeof status, L);
     int from = ref.deck >= 0 ? find_ref(L, &ref.t) : -1;
     if (!g_lib_ready) snprintf(head, sizeof head, "Reading the library...");
-    else if (!L->n) snprintf(head, sizeof head, "No rekordbox library on a USB");
+    else if (!L->n)
+        snprintf(head, sizeof head, "No rekordbox library yet, retrying...");
     else if (ref.deck < 0) snprintf(head, sizeof head, "Play a track to get suggestions");
     else if (from < 0) snprintf(head, sizeof head, "Deck %d: track not in the USB library", ref.deck + 1);
     else {
@@ -523,7 +567,16 @@ static void take_learning(void)
 static void *worker(void *arg)
 {
     (void)arg;
+    int loops = 0;                                        /* the loop naps 120 ms: count, no clock */
     for (;;) {
+        /* the stick may not be readable yet at start, or plugged in later: try again */
+        if (g_lib_ready && ++loops >= (int)(LIB_RETRY_S / 0.12)) {
+            loops = 0;
+            pthread_mutex_lock(&g_lib_mu);
+            int empty = g_lib.n == 0;
+            pthread_mutex_unlock(&g_lib_mu);
+            if (empty) atomic_store(&want_reload, 1);
+        }
         if (atomic_exchange(&want_reload, 0)) {
             read_config();
             nt_lib fresh, old;
@@ -703,9 +756,9 @@ static void fetch_community(const char *url)
 static void *net_thread(void *arg)
 {
     (void)arg;
-    double backoff_until = 0;
+    int backoff = 0;                                      /* naps of 500 ms left before trying again */
     for (;;) {
-        if (!rv(h_online, 1)) {
+        if (!S(S_ONLINE)) {
             nap_ms(1000);
             continue;
         }
@@ -725,7 +778,8 @@ static void *net_thread(void *arg)
             nap_ms(2000);
             continue;
         }
-        if (now_s() < backoff_until) {
+        if (backoff > 0) {
+            backoff--;
             nap_ms(500);
             continue;
         }
@@ -752,7 +806,7 @@ static void *net_thread(void *arg)
         int need_tags = !nt_pair_get(&g_lib.sim, 0, j.ident);
         pthread_mutex_unlock(&g_lib_mu);
         if (need_tags) fetch_tags(key, &j);
-        if (atomic_load(&net_state) == 4) backoff_until = now_s() + 30;   /* the WiFi may be down */
+        if (atomic_load(&net_state) == 4) backoff = 60;  /* the WiFi may be down: 30 s */
         if (atomic_load(&net_state) != before || j.sim) atomic_store(&want_compute, 1);
         else {
             pthread_mutex_lock(&g_net_mu);
@@ -844,7 +898,7 @@ static void poll_decks(void)
                 }
                 played[nplayed++] = me;
             }
-            if (have_settled && !same_track(&settled, me.artist, me.title) && rv(h_learn, 1))
+            if (have_settled && !same_track(&settled, me.artist, me.title) && S(S_LEARN))
                 push_learn(&settled, &me);
             settled = me;
             have_settled = 1;
@@ -853,7 +907,7 @@ static void poll_decks(void)
 
     /* the reference deck */
     static int ref = -1;
-    int mode = rv(h_ref, 0), pick = -1;
+    int mode = S(S_REF), pick = -1;
     if (mode >= 1 && mode <= 4) {
         if (mode - 1 < ndecks && dk[mode - 1].loaded) pick = mode - 1;
     } else {
@@ -1014,12 +1068,22 @@ static void panel_paint(az_draw *d, az_rect a, void *user)
     draw_list(d, a, 18, 1);
 }
 
+/* A setting changed on the UI thread: store it, save it, rescore, re-place the panel. */
+static void set_value(int i, int v)
+{
+    if (i < 0 || i >= S_N) return;
+    if (v < 0 || v >= SET[i].n) v = 0;
+    atomic_store(&g_set[i], v);
+    if (AZ_HAS(C, cfg_set)) C->cfg_set(MOD_ID, SET[i].key, v);
+    atomic_store(&settings_changed, 1);
+    atomic_store(&want_compute, 1);
+}
+
 static int panel_input(const az_event *ev, void *user)
 {
     (void)user;
     if (ev->kind == AZ_EV_TAP) {                          /* tap: Next <-> Chain */
-        if (h_mode >= 0) C->row_set(h_mode, rv(h_mode, 0) ? 0 : 1);
-        atomic_store(&want_compute, 1);
+        set_value(S_MODE, S(S_MODE) ? 0 : 1);
         return 1;
     }
     if (ev->kind == AZ_EV_LONG) {                         /* long press: fold / unfold */
@@ -1033,12 +1097,12 @@ static int panel_input(const az_event *ev, void *user)
 static void place_panel(void)
 {
     if (!panel) return;
-    int where = rv(h_panel, 0);                           /* 0 right, 1 left, 2 off */
+    int where = S(S_PANEL);                           /* 0 right, 1 left, 2 off */
     if (where == 2) {
         C->surface_show(panel, 0);
         return;
     }
-    int k = COUNTS[rv(h_count, 1) & 3];
+    int k = COUNTS[S(S_COUNT) & 3];
     int w = 470, h = panel_small ? 40 : 6 + 22 + 26 + k * (27 + 21 + 4) + 26;
     if (h > 700) h = 700;
     az_rect r = { where == 1 ? 10 : 1280 - w - 10, 90, w, h };
@@ -1047,31 +1111,134 @@ static void place_panel(void)
     C->surface_redraw(panel);
 }
 
+/* ---- the Mix Pilot page: settings, the suggestions, credits --------------------------- */
+
+enum { IT_SUGGEST = 0, IT_FIRST_SET = 1, IT_RELOAD = IT_FIRST_SET + S_N, IT_N };
+static int page_sel, page_top, page_list;       /* UI thread only; page_list = showing the suggestions */
+static int page_y0, page_row, page_lines;       /* where page_draw put the rows, for taps */
+
+static void reload_now(void)
+{
+    atomic_store(&want_reload, 1);
+    atomic_store(&community_pending, 1);
+    C->banner(MOD_ID, "Mix Pilot: reading the library again", 1500);
+}
+
+static void item_text(int it, char *label, size_t ln, char *value, size_t vn)
+{
+    value[0] = '\0';
+    if (it == IT_SUGGEST) snprintf(label, ln, "Show suggestions  >");
+    else if (it == IT_RELOAD) snprintf(label, ln, "Reload library");
+    else {
+        int i = it - IT_FIRST_SET;
+        snprintf(label, ln, "%s", SET[i].label);
+        snprintf(value, vn, "%s", SET[i].choices[S(i)]);
+    }
+}
+
+static void draw_credits(az_draw *d, az_rect a, int px)
+{
+    const int lh = px * 3 / 2, pad = px;
+    int y = a.y + a.h - 3 * lh - pad / 2;
+    C->fill_rect(d, a.x + pad, y - pad / 2, a.w - 2 * pad, 1, C->color(AZ_COL_TEXT_DIM));
+    text(d, a.x + pad, y, a.w - 2 * pad, "Vous aimez Mix Pilot ? Suivez-nous sur Instagram !", px, C->color(AZ_COL_TEXT));
+    text(d, a.x + pad, y + lh, a.w - 2 * pad, "Love Mix Pilot? Follow us on Instagram!", px, C->color(AZ_COL_TEXT_DIM));
+    text(d, a.x + pad, y + 2 * lh, a.w - 2 * pad, "@blinkevent38    @christopheb38", px, C->color(AZ_COL_HI));
+}
+
 static void page_draw(az_draw *d, az_rect area, void *user)
 {
     (void)user;
     int row = C->row_height(d);
-    C->draw_header(d, "Mix Pilot");
-    az_rect a = { area.x, area.y + row, area.w, area.h - row };
     int px = row / 2 > 14 ? row / 2 : 14;
     if (px > 24) px = 24;
-    if (a.h > px * 4) draw_list(d, a, px, 0);
+    C->draw_header(d, page_list ? "Mix Pilot - Suggestions" : "Mix Pilot");
+    az_rect a = { area.x, area.y + row, area.w, area.h - row };
+    if (a.h < px * 4) return;
+    if (page_list) {
+        draw_list(d, a, px, 0);
+        return;
+    }
+    const int small = px * 4 / 5 > 10 ? px * 4 / 5 : 10;
+    int credits_h = 3 * (small * 3 / 2) + small * 2;
+    int lines = (a.h - credits_h) / row;
+    if (lines < 1) lines = 1;
+    if (page_sel < page_top) page_top = page_sel;
+    if (page_sel >= page_top + lines) page_top = page_sel - lines + 1;
+    page_y0 = a.y;
+    page_row = row;
+    page_lines = lines;
+    for (int i = 0; i < lines && page_top + i < IT_N; i++) {
+        int it = page_top + i, y = a.y + i * row, on = it == page_sel;
+        if (on) C->fill_rect(d, a.x, y, a.w, row, C->color(AZ_COL_HI));
+        uint32_t fg = on ? C->color(AZ_COL_HI_TEXT) : C->color(AZ_COL_TEXT);
+        char label[48], value[32];
+        item_text(it, label, sizeof label, value, sizeof value);
+        int ty = y + (row - px * 3 / 2) / 2, vw = value[0] ? C->text_width(value, px) : 0;
+        text(d, a.x + px, ty, a.w - 3 * px - vw, label, px, fg);
+        if (vw) C->draw_text(d, a.x + a.w - px - vw, ty, value, px, on ? fg : C->color(AZ_COL_HI));
+    }
+    draw_credits(d, a, small);
+}
+
+static void activate(int it, int dir)
+{
+    if (it == IT_SUGGEST) {
+        page_list = 1;
+        atomic_store(&want_compute, 1);
+    } else if (it == IT_RELOAD) {
+        reload_now();
+    } else {
+        int i = it - IT_FIRST_SET;
+        set_value(i, (S(i) + (dir < 0 ? SET[i].n - 1 : 1)) % SET[i].n);
+    }
 }
 
 static int page_input(const az_event *ev, void *user)
 {
     (void)user;
-    if (ev->kind == AZ_EV_CLICK || ev->kind == AZ_EV_TAP) {
-        if (h_mode >= 0) C->row_set(h_mode, rv(h_mode, 0) ? 0 : 1);
-        atomic_store(&want_compute, 1);
+    if (page_list) {
+        if (ev->kind == AZ_EV_BACK) {
+            page_list = 0;
+            C->request_redraw();
+            return 1;
+        }
+        if (ev->kind == AZ_EV_CLICK || ev->kind == AZ_EV_TAP) {   /* Next <-> Chain */
+            set_value(S_MODE, S(S_MODE) ? 0 : 1);
+            C->request_redraw();
+            return 1;
+        }
+        return ev->kind == AZ_EV_KNOB;
+    }
+    switch (ev->kind) {
+    case AZ_EV_KNOB:
+        page_sel += ev->dir < 0 ? -1 : 1;
+        if (page_sel < 0) page_sel = 0;
+        if (page_sel >= IT_N) page_sel = IT_N - 1;
+        C->request_redraw();
+        return 1;
+    case AZ_EV_CLICK:
+        activate(page_sel, 1);
+        C->request_redraw();
+        return 1;
+    case AZ_EV_TAP: {                                      /* a tap changes the row under the finger */
+        if (page_row <= 0 || ev->y < page_y0) return 1;
+        int i = (ev->y - page_y0) / page_row;
+        if (i >= page_lines || page_top + i >= IT_N) return 1;
+        page_sel = page_top + i;
+        activate(page_sel, 1);
+        C->request_redraw();
         return 1;
     }
-    return 0;
+    default:
+        return 0;
+    }
 }
 
 static void page_enter(void *user)
 {
     (void)user;
+    page_list = 0;
     atomic_store(&want_compute, 1);
     C->request_redraw();
 }
@@ -1080,81 +1247,18 @@ static const az_screen_v1 PAGE = {
     .size = sizeof(az_screen_v1), .on_draw = page_draw, .on_input = page_input, .on_enter = page_enter,
 };
 
-/* ---- rows ------------------------------------------------------------------------------ */
-
-static void changed(int value, void *user)
-{
-    (void)value;
-    (void)user;
-    atomic_store(&settings_changed, 1);
-    atomic_store(&want_compute, 1);
-}
-
-static void reload_now(void *user)
-{
-    (void)user;
-    atomic_store(&want_reload, 1);
-    atomic_store(&community_pending, 1);
-    C->banner(MOD_ID, "Mix Pilot: reading the library again", 1500);
-}
-
-static int add_row(const char *key, const char *label, int kind, unsigned flags, const char *help,
-                   const char *const *choices, int n, int def)
+/* One row in the Mod Menu: it opens the page above (BACK returns to the row). */
+static void register_rows(void)
 {
     az_row_v1 r;
     memset(&r, 0, sizeof r);
     r.size = sizeof r;
-    r.key = key;
-    r.label = label;
-    r.kind = kind;
-    r.flags = flags;
-    r.help = help;
-    r.choices = choices;
-    r.n_choices = n;
-    r.default_choice = def;
-    r.on_change = changed;
-    if (kind == AZ_ROW_ACTION) { r.on_change = NULL; r.on_activate = reload_now; }
-    return C->register_row(MOD_ID, &r);
-}
-
-static void register_rows(void)
-{
-    static const char *const panel_c[] = { "Right", "Left", "Off" };
-    static const char *const mode_c[] = { "Next tracks", "Chain" };
-    static const char *const count_c[] = { "4", "5", "8", "10" };
-    static const char *const flow_c[] = { "Smooth", "Build up", "Cool down" };
-    static const char *const ref_c[] = { "Auto", "Deck 1", "Deck 2", "Deck 3", "Deck 4" };
-    add_row("group", "Mix Pilot", AZ_ROW_GROUP, 0,
-            "Next-track suggestions from key, tempo, style and transitions DJs actually play.", NULL, 0, 0);
-    h_panel = add_row("panel", "Panel", AZ_ROW_CHOICE, 0,
-                      "Where the suggestions show on BROWSE and SEARCH. Tap the panel to switch Next / "
-                      "Chain, hold it to fold it.", panel_c, 3, 0);
-    h_mode = add_row("mode", "Mode", AZ_ROW_CHOICE, 0,
-                     "Next tracks: the best next tracks. Chain: an ordered plan, each track mixing "
-                     "into the next.", mode_c, 2, 0);
-    h_count = add_row("count", "Tracks shown", AZ_ROW_CHOICE, 0, "How many suggestions.", count_c, 4, 1);
-    h_flow = add_row("flow", "Energy", AZ_ROW_CHOICE, 0,
-                     "Build up favors faster tracks and rising keys; Cool down the opposite.", flow_c, 3, 0);
-    h_ref = add_row("ref", "Follow", AZ_ROW_CHOICE, 0,
-                    "Auto follows the deck that started playing last.", ref_c, 5, 0);
-    h_artist = add_row("artist", "Avoid same artist", AZ_ROW_TOGGLE, AZ_ROW_DEFAULT_ON,
-                       "Ranks the playing artist's other tracks a little lower.", NULL, 0, 0);
-    h_learn = add_row("learn", "Learn my transitions", AZ_ROW_TOGGLE, AZ_ROW_DEFAULT_ON,
-                      "Remembers which track you play after which (my-transitions.tsv on the USB) and "
-                      "suggests those again.", NULL, 0, 0);
-    h_online = add_row("online", "Online (Last.fm)", AZ_ROW_TOGGLE, AZ_ROW_DEFAULT_ON,
-                       "Style tags and similar tracks from Last.fm over WiFi. Needs a free API key in "
-                       "config.txt on the USB.", NULL, 0, 0);
-    az_row_v1 page;
-    memset(&page, 0, sizeof page);
-    page.size = sizeof page;
-    page.key = "open";
-    page.label = "Suggestions";
-    page.kind = AZ_ROW_SCREEN;
-    page.help = "The suggestions on a full page.";
-    C->register_row(MOD_ID, &page);
-    add_row("reload", "Reload library", AZ_ROW_ACTION, 0,
-            "Reads the USB library, config.txt and the pairings files again.", NULL, 0, 0);
+    r.key = "open";
+    r.label = "Mix Pilot";
+    r.kind = AZ_ROW_SCREEN;
+    r.help = "Next-track suggestions and their settings. Turn the knob, click to change.";
+    r.screen = &PAGE;
+    if (C->register_row(MOD_ID, &r) < 0) C->log(MOD_ID, "the Mod Menu row was refused");
 }
 
 /* ---- lifecycle ------------------------------------------------------------------------- */
@@ -1188,8 +1292,8 @@ static int init(const az_core_v1 *core)
     const char *dd = C->data_dir(MOD_ID), *ad = C->assets_dir(MOD_ID);
     snprintf(g_data_dir, sizeof g_data_dir, "%s", dd ? dd : "");
     snprintf(g_assets_dir, sizeof g_assets_dir, "%s", ad ? ad : "");
-    if (AZ_HAS(C, register_row) && AZ_HAS(C, row_value)) register_rows();
-    else C->log(MOD_ID, "no Mod Menu rows on this core: default settings");
+    load_settings();
+    if (AZ_HAS(C, register_row)) register_rows();
     if (C->register_screen(MOD_ID, &PAGE) != 0) C->log(MOD_ID, "register_screen refused");
     static const az_surface_v1 PANEL = {
         .size = sizeof(az_surface_v1),
