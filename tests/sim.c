@@ -40,7 +40,7 @@ static const struct t LIB[] = {
     { 15, "Reprise", "Xi", "Am", 126, 2 },            { 16, "Hands Up", "Omicron", "C", 125, 2 },
     { 17, "Sunset", "Pi", "F", 119, 3 },              { 18, "Basement", "Rho", "Gm", 122, 1 },
     { 19, "Neon", "Sigma", "Cm", 127, 2 },            { 20, "Dawn", "Tau", "G", 121, 3 },
-    { 21, "Echoes", "Upsilon", "Em", 122, 1 },        { 22, "Loop", "Phi", "Am", 122, 1 },
+    { 21, "Echoes", "Upsilon", "Em", 122, 1 },        { 22, "Loop \xc3\x89t\xc3\xa9", "Ph\xc3\xafl", "Am", 122, 1 },
     { 23, "Glow", "Chi", "C", 123, 1 },               { 24, "Pulse", "Psi", "Dm", 122, 1 },
     { 25, "Ride", "Omega", "F#m", 122, 2 },           { 26, "Heat", "Alpha2", "Bbm", 128, 2 },
     { 27, "Calm", "Beta2", "E", 100, 3 },             { 28, "Spin", "Gamma2", "Am", 123, 1 },
@@ -157,11 +157,19 @@ static int thread_start(const char *id, const char *name, void *(*fn)(void *), v
 
 static az_core_v1 CORE;
 
+static void no_accents(void)
+{
+    for (int i = 0; i < nscreen; i++)
+        for (const unsigned char *c = (const unsigned char *)screen_text[i]; *c; c++)
+            if (*c >= 0x80) { fails++; fprintf(stderr, "sim: non-ASCII on screen: %s\n", screen_text[i]); return; }
+}
+
 static void paint(void)
 {
     nscreen = 0;
     az_rect a = { 800, 90, 470, 600 };
     surf.on_paint(NULL, a, surf.user);
+    no_accents();
 }
 
 static int screen_has(const char *needle)
@@ -197,7 +205,9 @@ static void make_fake_stick(void)
                     " && touch " FAKE "/media/usb/sdz1/PIONEER/rekordbox/export.pdb"
                     " && ln -s " FAKE "/sys/devices/soc/usb1/1-1/1-1:1.0/host0/target0/block/sdz1 " FAKE
                     "/sys/class/block/sdz1"
-                    " && echo '/dev/sdz1 " FAKE "/media/usb/sdz1 vfat rw 0 0' > " FAKE "/mounts");
+                    " && mkdir -p " FAKE "/media/usb/sdy1/MODS " FAKE "/sys/devices/soc/usb2/2-1/2-1:1.0/host1/target1/block/sdy1"
+                    " && ln -s " FAKE "/sys/devices/soc/usb2/2-1/2-1:1.0/host1/target1/block/sdy1 " FAKE "/sys/class/block/sdy1"
+                    " && printf '/dev/sdz1 " FAKE "/media/usb/sdz1 vfat rw 0 0\\n/dev/sdy1 " FAKE "/media/usb/sdy1 vfat rw 0 0\\n' > " FAKE "/mounts");
     if (rc != 0) { fails++; fprintf(stderr, "sim: could not build the fake stick\n"); }
 }
 
@@ -220,7 +230,8 @@ int main(void)
     CHECK(nrows == 1 && row_screen != NULL);            /* one row in the Mod Menu, opening our page */
     run(1.0);
     dump("stick not readable yet");
-    CHECK(screen_has("No exportLibrary.db") && screen_has("USB1 -1/-1") && screen_has("sdz1:pdb p1"));   /* the fake stick */
+    CHECK(screen_has("No exportLibrary.db") && screen_has("USB1 -1/-1") && screen_has("sdz1:pdb p1 P+ R1"));
+    CHECK(screen_has("sdy1:- p2 P- R-1"));                  /* the stick with no export: as on the deck */
     __atomic_store_n(&lib_ready, 1, __ATOMIC_RELEASE);  /* the stick becomes readable */
     run(2.5);
     dump("empty decks");
@@ -247,6 +258,7 @@ int main(void)
     CHECK(!screen_has("Second Wind"));                     /* loaded on deck 2: never suggested */
     CHECK(!screen_has("Fast Lane"));                       /* 150 BPM */
     CHECK(screen_has("Deep House"));                       /* "in <playlist>" */
+    CHECK(screen_has("Loop Ete - Phil"));                  /* accents folded for the deck's font */
     CHECK(screen_has("Smooth") && screen_has("Build up") && screen_has("Cool down"));   /* the tabs */
     char smooth_first[200] = "", up_first[200] = "";
     for (int i = 0; i < nscreen; i++)
@@ -309,7 +321,8 @@ int main(void)
     run(1.0);
     nscreen = 0;
     row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
-    CHECK(screen_has("Langue") && screen_has("Fran") && screen_has("Suivez-nous"));
+    CHECK(screen_has("Langue") && screen_has("Francais") && screen_has("Suivez-nous") && screen_has("Energie"));
+    no_accents();
     paint();
     dump("in French");
     CHECK(screen_has("Plan apr") && screen_has("Stable") && screen_has("Monter"));
@@ -318,7 +331,8 @@ int main(void)
     for (int i = 0; i < 3; i++) row_screen->on_input(&click, row_screen->user);
     nscreen = 0;
     row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
-    CHECK(screen_has("Lingua") && screen_has("Italiano") && screen_has("Seguici"));
+    CHECK(screen_has("Lingua") && screen_has("Italiano") && screen_has("Seguici") && screen_has("Modalita"));
+    no_accents();
 
     printf("sim: %s\n", fails ? "FAILED" : "all checks passed");
     return fails != 0;

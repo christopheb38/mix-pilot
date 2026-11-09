@@ -23,6 +23,7 @@
  * Files, all on the USB in data_dir(): config.txt (API key, pairings URL), my-transitions.tsv
  * (what you mixed), community.tsv (downloaded pairings), lastfm-cache.tsv (web answers).
  */
+#include <dirent.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -415,7 +416,7 @@ static int on_track_pl(const az_track *t, void *user)
 static atomic_int g_rc[2][2];     /* per stick: lib_tracks(all) and lib_playlists results, for the screen */
 static pthread_mutex_t g_diag_mu = PTHREAD_MUTEX_INITIALIZER;
 static char g_diag[96];          /* what we found on the sticks when the core gave no library */
-static atomic_int g_diag_code;   /* 0 none, 1 no stick, 2 export.pdb only, 3 port not recognized, 4 refused */
+static atomic_int g_diag_code;   /* 0 none, 1 no stick, 2 export.pdb only, 3 port not recognized, 4 refused, 5 no export */
 
 /* The USB port of a block device, by the same rule as the core (sdk_lib.c): 1, 2, or 0 unknown. */
 static int port_of_sysfs(const char *real)
@@ -456,6 +457,9 @@ static int port_of_sysfs(const char *real)
 /* When the core reads no library: look at the sticks ourselves and say why, in plain words. */
 static void diagnose(void)
 {
+    /* codes, most useful first: 4 refused, 3 port unknown, 2 export.pdb only, 5 stick without a
+     * rekordbox export, 1 no stick at all */
+    static const int rank[6] = { 0, 1, 4, 5, 6, 3 };
     char out[96] = "";
     int code = 1, o = 0;
     FILE *f = fopen(MP_MOUNTS, "re");
@@ -474,13 +478,35 @@ static void diagnose(void)
             int db = access(p, R_OK) == 0;
             snprintf(p, sizeof p, "%s/PIONEER/rekordbox/export.pdb", mp);
             int pdb = access(p, R_OK) == 0;
+            snprintf(p, sizeof p, "%s/PIONEER", mp);
+            int pioneer = access(p, F_OK) == 0;
+            /* what PIONEER/rekordbox holds: the entry count here, the first names in the log */
+            int nrb = -1;
+            char names[160] = "";
+            snprintf(p, sizeof p, "%s/PIONEER/rekordbox", mp);
+            DIR *dir = opendir(p);
+            if (dir) {
+                struct dirent *e;
+                nrb = 0;
+                while ((e = readdir(dir)) != NULL) {
+                    if (e->d_name[0] == '.') continue;
+                    if (nrb < 6 && strlen(names) + strlen(e->d_name) + 2 < sizeof names)
+                        snprintf(names + strlen(names), sizeof names - strlen(names), "%s%s",
+                                 names[0] ? "," : "", e->d_name);
+                    nrb++;
+                }
+                closedir(dir);
+            }
             snprintf(sys, sizeof sys, "%s/%s", MP_SYSBLOCK, dev + 5);
             int port = realpath(sys, real) ? port_of_sysfs(real) : 0;
-            int c = db ? (port ? 4 : 3) : pdb ? 2 : 1;
-            if (c > code || code == 1) code = c > code ? c : code;
+            int c = db ? (port ? 4 : 3) : pdb ? 2 : 5;
+            if (rank[c] > rank[code]) code = c;
             if (o < (int)sizeof out - 1)
-                o += snprintf(out + o, sizeof out - (size_t)o, "%s%s:%s%s p%d", o ? " " : "", dev + 5,
-                              db ? "db" : "", pdb ? (db ? "+pdb" : "pdb") : (db ? "" : "-"), port);
+                o += snprintf(out + o, sizeof out - (size_t)o, "%s%s:%s%s p%d %s R%d", o ? " " : "", dev + 5,
+                              db ? "db" : "", pdb ? (db ? "+pdb" : "pdb") : (db ? "" : "-"), port,
+                              pioneer ? "P+" : "P-", nrb);
+            tlog("%s on %s: db %d, pdb %d, port %d, PIONEER %d, rekordbox/: %s", dev, mp, db, pdb, port,
+                 pioneer, nrb < 0 ? "missing" : names);
         }
         fclose(f);
     }
@@ -651,9 +677,9 @@ static void compute(void)
     int from = ref.deck >= 0 ? find_ref(L, &ref.t) : -1;
     if (!g_lib_ready) snprintf(head, sizeof head, "%s", tr(T_READING));
     else if (!L->n) {
-        static const int dt[] = { T_NOLIB, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED };
+        static const int dt[] = { T_NOLIB, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT };
         int c = atomic_load(&g_diag_code);
-        snprintf(head, sizeof head, "%s", tr(dt[c >= 0 && c <= 4 ? c : 0]));
+        snprintf(head, sizeof head, "%s", tr(dt[c >= 0 && c <= 5 ? c : 0]));
     } else if (ref.deck < 0) snprintf(head, sizeof head, "%s", tr(T_PLAY));
     else if (from < 0) snprintf(head, sizeof head, tr(T_NOTIN), ref.deck + 1);
     else {
@@ -1168,11 +1194,52 @@ static void fit(char *out, size_t n, const char *s, int px, int w)
     if (C->text_width(out, px) > w) out[0] = '\0';
 }
 
+/* The deck's font has no accented letters: fold UTF-8 to plain ASCII before drawing.
+ * Latin-1 letters lose their accents (e -> e, n -> n, ss for the German sharp s), typographic
+ * quotes and dashes become ' " -, and anything else becomes '?'. */
+static void to_ascii(const char *in, char *out, size_t n)
+{
+    static const char *const c3[64] = {
+        "A", "A", "A", "A", "A", "A", "AE", "C", "E", "E", "E", "E", "I", "I", "I", "I",
+        "D", "N", "O", "O", "O", "O", "O", "x", "O", "U", "U", "U", "U", "Y", "Th", "ss",
+        "a", "a", "a", "a", "a", "a", "ae", "c", "e", "e", "e", "e", "i", "i", "i", "i",
+        "d", "n", "o", "o", "o", "o", "o", "/", "o", "u", "u", "u", "u", "y", "th", "y",
+    };
+    size_t o = 0;
+    const unsigned char *p = (const unsigned char *)in;
+    while (*p && o + 4 < n) {
+        const char *rep = NULL;
+        int len = 1;
+        if (*p < 0x80) {
+            out[o++] = (char)*p++;
+            continue;
+        }
+        if (*p == 0xC3 && (p[1] & 0xC0) == 0x80) { rep = c3[p[1] & 0x3F]; len = 2; }
+        else if (*p == 0xC2 && (p[1] & 0xC0) == 0x80) { rep = p[1] == 0xA0 ? " " : ""; len = 2; }   /* nbsp, and drop the rest of C2 */
+        else if (*p == 0xC5 && (p[1] == 0x92 || p[1] == 0x93)) { rep = p[1] == 0x92 ? "OE" : "oe"; len = 2; }
+        else if (*p == 0xE2 && p[1] == 0x80 && (p[2] & 0xC0) == 0x80) {
+            unsigned c = p[2];
+            rep = (c == 0x98 || c == 0x99) ? "'" : (c == 0x9C || c == 0x9D) ? "\"" : (c == 0x93 || c == 0x94) ? "-"
+                : c == 0xA6 ? "..." : "?";
+            len = 3;
+        } else {                                         /* another character: one '?' for it */
+            rep = "?";
+            len = *p >= 0xF0 ? 4 : *p >= 0xE0 ? 3 : 2;
+            for (int i = 1; i < len; i++)
+                if ((p[i] & 0xC0) != 0x80) { len = i; break; }
+        }
+        for (const char *r = rep; *r && o + 1 < n; r++) out[o++] = *r;
+        p += len;
+    }
+    out[o] = '\0';
+}
+
 static void text(az_draw *d, int x, int y, int w, const char *s, int px, uint32_t rgb)
 {
-    char f[256];
+    char f[256], a[256];
     if (w <= 0) return;
-    fit(f, sizeof f, s, px, w);
+    to_ascii(s, a, sizeof a);
+    fit(f, sizeof f, a, px, w);
     if (f[0]) C->draw_text(d, x, y, f, px, rgb);
 }
 
