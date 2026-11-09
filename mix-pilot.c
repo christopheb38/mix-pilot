@@ -170,7 +170,19 @@ struct net_job {
 static struct net_job g_jobs[24];
 static int g_njobs;
 static char g_cfg_key[64], g_cfg_url[256];
-static atomic_int net_state;    /* 0 idle, 1 no key, 2 no libcurl, 3 ok, 4 failing */
+static char g_deck_key[64];      /* the key typed on the deck (cfg_set_str), preferred over config.txt */
+static atomic_int g_reload_state, g_reload_count;   /* 1 reading, 2 done: shown on the Reload row */
+static atomic_int net_state;    /* 0 idle, 1 no key, 2 no libcurl, 3 ok, 4 failing, 5 key refused */
+static char g_net_err[96];       /* why, for the screen (under g_net_mu) */
+
+/* Net thread: a failed request. LFM_BADKEY means the key, anything else the network. */
+static void net_failed(int r)
+{
+    pthread_mutex_lock(&g_net_mu);
+    snprintf(g_net_err, sizeof g_net_err, "%s", net_last_error());
+    pthread_mutex_unlock(&g_net_mu);
+    atomic_store(&net_state, r == LFM_BADKEY ? 5 : 4);
+}
 static atomic_int community_pending = 1;
 
 /* ---- small helpers --------------------------------------------------------------------- */
@@ -276,6 +288,9 @@ static void read_config(void)
     path_in(p, sizeof p, dir, "config.txt");
     FILE *f = fopen(p, "re");
     if (!f) {
+        pthread_mutex_lock(&g_net_mu);
+        if (g_deck_key[0]) snprintf(g_cfg_key, sizeof g_cfg_key, "%s", g_deck_key);
+        pthread_mutex_unlock(&g_net_mu);
         f = fopen(p, "we");
         if (f) {
             fputs("# Mix Pilot settings. Edit on your computer, then Reload in the Mod Menu.\n"
@@ -299,7 +314,7 @@ static void read_config(void)
     }
     fclose(f);
     pthread_mutex_lock(&g_net_mu);
-    snprintf(g_cfg_key, sizeof g_cfg_key, "%s", key);
+    snprintf(g_cfg_key, sizeof g_cfg_key, "%s", g_deck_key[0] ? g_deck_key : key);
     snprintf(g_cfg_url, sizeof g_cfg_url, "%s", url);
     pthread_mutex_unlock(&g_net_mu);
 }
@@ -743,8 +758,15 @@ static void queue_job(uint32_t ident, const char *artist, const char *title, int
 static void status_line(char *s, size_t n, const nt_lib *L)
 {
     int ns = atomic_load(&net_state);
+    char netbuf[160];
     const char *net = ns == 1 ? tr(T_NET_KEY) : ns == 2 ? tr(T_NET_OFFLINE) : ns == 3 ? tr(T_NET_ON)
-                    : ns == 4 ? tr(T_NET_FAIL) : "";
+                    : ns == 5 ? tr(T_NET_BADKEY) : "";
+    if (ns == 4) {                                        /* say why: "curl 6 ...", "HTTP 503" */
+        pthread_mutex_lock(&g_net_mu);
+        snprintf(netbuf, sizeof netbuf, "%s (%s)", tr(T_NET_FAIL), g_net_err);
+        pthread_mutex_unlock(&g_net_mu);
+        net = netbuf;
+    }
     if (!S(S_ONLINE)) net = tr(T_NET_DISABLED);
     if (!L->n) {                                          /* what the core answered, and what we saw */
         char diag[96];
@@ -916,6 +938,8 @@ static void *worker(void *arg)
                 g_lib_ready = 1;
                 pthread_mutex_unlock(&g_lib_mu);
                 nt_lib_free(&old);
+                atomic_store(&g_reload_count, fresh.n);
+                atomic_store(&g_reload_state, 2);
                 tlog("library: %d tracks, %u transitions, %u web pairs", fresh.n, fresh.pairs.n,
                        fresh.sim.n);
             } else {
@@ -986,7 +1010,7 @@ static void fetch_tags(const char *key, const struct net_job *j)
         r = lfm_artist_tags(key, j->artist, on_tag, &ta);
     }
     if (r < 0 && ta.n == 0) {
-        atomic_store(&net_state, 4);
+        net_failed(r);
         return;
     }
     atomic_store(&net_state, 3);
@@ -1012,7 +1036,7 @@ static void fetch_similar(const char *key, const struct net_job *j)
     if (!a) return;
     int r = lfm_similar_tracks(key, j->artist, j->title, 150, on_sim, a);
     if (r < 0) {
-        atomic_store(&net_state, 4);
+        net_failed(r);
         free(a);
         return;
     }
@@ -1086,6 +1110,7 @@ static void *net_thread(void *arg)
 {
     (void)arg;
     int backoff = 0;                                      /* naps of 500 ms left before trying again */
+    char last_key[64] = "";
     for (;;) {
         if (!S(S_ONLINE)) {
             nap_ms(1000);
@@ -1096,6 +1121,11 @@ static void *net_thread(void *arg)
         snprintf(key, sizeof key, "%s", g_cfg_key);
         snprintf(url, sizeof url, "%s", g_cfg_url);
         pthread_mutex_unlock(&g_net_mu);
+        if (strcmp(key, last_key) != 0) {                 /* a new key: try at once */
+            snprintf(last_key, sizeof last_key, "%s", key);
+            backoff = 0;
+            atomic_store(&net_state, 0);
+        }
         if (net_available() != 0) {
             if (atomic_exchange(&net_state, 2) != 2) atomic_store(&want_compute, 1);
             nap_ms(5000);
@@ -1136,6 +1166,7 @@ static void *net_thread(void *arg)
         pthread_mutex_unlock(&g_lib_mu);
         if (need_tags) fetch_tags(key, &j);
         if (atomic_load(&net_state) == 4) backoff = 60;  /* the WiFi may be down: 30 s */
+        if (atomic_load(&net_state) == 5) backoff = 600; /* a refused key: again in 5 min, or when it changes */
         if (atomic_load(&net_state) != before || j.sim) atomic_store(&want_compute, 1);
         else {
             pthread_mutex_lock(&g_net_mu);
@@ -1565,17 +1596,14 @@ static int panel_input(const az_event *ev, void *user)
         }
         return 1;
     }
-    if (ev->kind == AZ_EV_LONG) {                         /* long press: fold / unfold too */
-        panel_small = !panel_small;
-        atomic_store(&settings_changed, 1);
-        return 1;
-    }
+    /* No long press: the core sends AZ_EV_LONG when the release was not seen on the surface,
+     * which is what happens when folding shrinks the panel under the finger (it reopened). */
     return 0;
 }
 
 /* The bottom of the browse list on the 1280x800 screen: the decks' info strip starts below it. */
 #ifndef BOTTOM_EDGE
-#define BOTTOM_EDGE 640
+#define BOTTOM_EDGE 704   /* measured on a deck photo: the decks' info starts at ~705 */
 #endif
 
 static void place_panel(void)
@@ -1603,12 +1631,13 @@ static void place_panel(void)
 
 /* ---- the Mix Pilot page: settings, the suggestions, credits --------------------------- */
 
-enum { IT_SUGGEST = 0, IT_FIRST_SET = 1, IT_RELOAD = IT_FIRST_SET + S_N, IT_N };
+enum { IT_SUGGEST = 0, IT_FIRST_SET = 1, IT_KEY = IT_FIRST_SET + S_N, IT_RELOAD, IT_N };
 static int page_sel, page_top, page_list;       /* UI thread only; page_list = showing the suggestions */
 static int page_y0, page_row, page_lines;       /* where page_draw put the rows, for taps */
 
 static void reload_now(void)
 {
+    atomic_store(&g_reload_state, 1);
     atomic_store(&want_reload, 1);
     atomic_store(&community_pending, 1);
     C->banner(MOD_ID, tr(T_BANNER), 1500);
@@ -1618,11 +1647,138 @@ static void item_text(int it, char *label, size_t ln, char *value, size_t vn)
 {
     value[0] = '\0';
     if (it == IT_SUGGEST) snprintf(label, ln, "%s", tr(T_SHOW));
-    else if (it == IT_RELOAD) snprintf(label, ln, "%s", tr(T_RELOAD));
+    else if (it == IT_RELOAD) {
+        snprintf(label, ln, "%s", tr(T_RELOAD));
+        int st = atomic_load(&g_reload_state);
+        if (st == 1) snprintf(value, vn, "%s", tr(T_RELOADING));
+        else if (st == 2) snprintf(value, vn, "OK - %d", atomic_load(&g_reload_count));
+    } else if (it == IT_KEY) {
+        snprintf(label, ln, "%s", tr(T_KEY));
+        char k[64];
+        pthread_mutex_lock(&g_net_mu);
+        snprintf(k, sizeof k, "%s", g_cfg_key[0] ? g_cfg_key : g_deck_key);
+        pthread_mutex_unlock(&g_net_mu);
+        if (k[0]) snprintf(value, vn, "%.4s...%s", k, strlen(k) >= 4 ? k + strlen(k) - 2 : "");
+        else snprintf(value, vn, "%s", tr(T_KEY_NONE));
+    }
     else {
         int i = it - IT_FIRST_SET;
         snprintf(label, ln, "%s", tr(SET[i].label));
         choice_text(i, S(i), value, vn);
+    }
+}
+
+/* ---- typing the Last.fm key on the deck ------------------------------------------------
+ * A Last.fm API key is 32 characters from 0-9 and a-f, so a 16-key pad does: the knob moves,
+ * a click (or a tap) presses. Saved with cfg_set_str on the deck, preferred over config.txt. */
+enum { KP_HEX = 16, KP_DEL = 16, KP_CLEAR, KP_OK, KP_CANCEL, KP_N };
+static int page_key, key_sel, key_bad;            /* UI thread only */
+static char key_buf[40];
+static az_rect kp_rect[KP_N];
+
+static void key_open(void)
+{
+    pthread_mutex_lock(&g_net_mu);
+    snprintf(key_buf, sizeof key_buf, "%s", g_deck_key[0] ? g_deck_key : g_cfg_key);
+    pthread_mutex_unlock(&g_net_mu);
+    if (strlen(key_buf) > 32) key_buf[32] = '\0';
+    page_key = 1;
+    key_sel = 0;
+    key_bad = 0;
+}
+
+static void key_press(int k)
+{
+    size_t n = strlen(key_buf);
+    key_bad = 0;
+    if (k < KP_HEX) {
+        if (n < 32) {
+            key_buf[n] = "0123456789abcdef"[k];
+            key_buf[n + 1] = '\0';
+        }
+        if (n + 1 == 32) key_sel = KP_OK;                 /* full: go to OK */
+    } else if (k == KP_DEL) {
+        if (n) key_buf[n - 1] = '\0';
+    } else if (k == KP_CLEAR) {
+        key_buf[0] = '\0';
+    } else if (k == KP_CANCEL) {
+        page_key = 0;
+    } else if (k == KP_OK) {
+        if (n != 0 && n != 32) {
+            key_bad = 1;                                  /* a key has 32 characters (empty = remove it) */
+            return;
+        }
+        pthread_mutex_lock(&g_net_mu);
+        snprintf(g_deck_key, sizeof g_deck_key, "%s", key_buf);
+        snprintf(g_cfg_key, sizeof g_cfg_key, "%s", key_buf);
+        pthread_mutex_unlock(&g_net_mu);
+        if (AZ_HAS(C, cfg_set_str)) C->cfg_set_str(MOD_ID, "lfmkey", key_buf);
+        atomic_store(&want_reload, 1);                    /* re-read config.txt for a removed deck key */
+        page_key = 0;
+    }
+}
+
+static void key_draw(az_draw *d, az_rect a, int px)
+{
+    const uint32_t fg = C->color(AZ_COL_TEXT), dim = C->color(AZ_COL_TEXT_DIM), hi = C->color(AZ_COL_HI);
+    const int pad = px, lh = px * 3 / 2;
+    int y = a.y + pad / 2;
+    text(d, a.x + pad, y, a.w - 2 * pad, tr(T_KEY_HINT), px * 4 / 5, key_bad ? 0xe74c3c : dim);
+    y += lh;
+    if (key_bad) {
+        text(d, a.x + pad, y, a.w - 2 * pad, tr(T_KEY_BAD), px * 4 / 5, 0xe74c3c);
+    }
+    y += lh;
+    char shown[48];
+    snprintf(shown, sizeof shown, "%s_", key_buf);
+    C->draw_rect(d, a.x + pad, y - 4, a.w - 2 * pad, lh + 8, 1, dim);
+    text(d, a.x + 2 * pad, y, a.w - 4 * pad - 80, shown, px, fg);
+    char cnt[16];
+    snprintf(cnt, sizeof cnt, "%d/32", (int)strlen(key_buf));
+    C->draw_text(d, a.x + a.w - 2 * pad - C->text_width(cnt, px * 4 / 5), y + 2, cnt, px * 4 / 5, dim);
+    y += lh + 3 * pad / 2;
+    int kw = (a.w - 2 * pad) / 8, kh = lh + pad;
+    for (int k = 0; k < KP_N; k++) {
+        az_rect r;
+        if (k < KP_HEX) r = (az_rect){ a.x + pad + (k % 8) * kw, y + (k / 8) * (kh + 6), kw - 6, kh };
+        else r = (az_rect){ a.x + pad + (k - KP_HEX) * 2 * kw, y + 2 * (kh + 6), 2 * kw - 6, kh };
+        kp_rect[k] = r;
+        int on = k == key_sel;
+        if (on) C->fill_rect(d, r.x, r.y, r.w, r.h, hi);
+        else C->draw_rect(d, r.x, r.y, r.w, r.h, 1, dim);
+        char lab[32];
+        if (k < KP_HEX) snprintf(lab, sizeof lab, "%c", "0123456789abcdef"[k]);
+        else snprintf(lab, sizeof lab, "%s", tr(k == KP_DEL ? T_DEL : k == KP_CLEAR ? T_CLEAR : k == KP_OK ? T_OK : T_CANCEL));
+        int lw = C->text_width(lab, px);
+        text(d, r.x + (r.w - lw) / 2, r.y + (r.h - px * 3 / 2) / 2, r.w - 4, lab, px,
+             on ? C->color(AZ_COL_HI_TEXT) : fg);
+    }
+}
+
+static int key_input(const az_event *ev)
+{
+    switch (ev->kind) {
+    case AZ_EV_KNOB:
+        key_sel = (key_sel + (ev->dir < 0 ? KP_N - 1 : 1)) % KP_N;
+        return 1;
+    case AZ_EV_CLICK:
+        key_press(key_sel);
+        return 1;
+    case AZ_EV_TAP:
+        for (int k = 0; k < KP_N; k++) {
+            az_rect r = kp_rect[k];
+            if (ev->x >= r.x && ev->x < r.x + r.w && ev->y >= r.y && ev->y < r.y + r.h) {
+                key_sel = k;
+                key_press(k);
+                break;
+            }
+        }
+        return 1;
+    case AZ_EV_BACK:
+        page_key = 0;
+        return 1;
+    default:
+        return 0;
     }
 }
 
@@ -1641,9 +1797,13 @@ static void page_draw(az_draw *d, az_rect area, void *user)
     int row = C->row_height(d);
     int px = row / 2 > 14 ? row / 2 : 14;
     if (px > 24) px = 24;
-    C->draw_header(d, page_list ? tr(T_SUGG_TITLE) : "Mix Pilot");
+    C->draw_header(d, page_key ? tr(T_KEY) : page_list ? tr(T_SUGG_TITLE) : "Mix Pilot");
     az_rect a = { area.x, area.y + row, area.w, area.h - row };
     if (a.h < px * 4) return;
+    if (page_key) {
+        key_draw(d, a, px);
+        return;
+    }
     if (page_list) {
         draw_list(d, a, px, 0);
         return;
@@ -1677,6 +1837,8 @@ static void activate(int it, int dir)
         atomic_store(&want_compute, 1);
     } else if (it == IT_RELOAD) {
         reload_now();
+    } else if (it == IT_KEY) {
+        key_open();
     } else {
         int i = it - IT_FIRST_SET;
         set_value(i, (S(i) + (dir < 0 ? SET[i].n - 1 : 1)) % SET[i].n);
@@ -1686,6 +1848,11 @@ static void activate(int it, int dir)
 static int page_input(const az_event *ev, void *user)
 {
     (void)user;
+    if (page_key) {
+        int r = key_input(ev);
+        C->request_redraw();
+        return r;
+    }
     if (page_list) {
         if (ev->kind == AZ_EV_BACK) {
             page_list = 0;
@@ -1733,6 +1900,8 @@ static void page_enter(void *user)
 {
     (void)user;
     page_list = 0;
+    page_key = 0;
+    if (atomic_load(&g_reload_state) == 2) atomic_store(&g_reload_state, 0);
     atomic_store(&want_compute, 1);
     C->request_redraw();
 }
@@ -1788,6 +1957,7 @@ static int init(const az_core_v1 *core)
     snprintf(g_data_dir, sizeof g_data_dir, "%s", dd ? dd : "");
     snprintf(g_assets_dir, sizeof g_assets_dir, "%s", ad ? ad : "");
     load_settings();
+    if (AZ_HAS(C, cfg_get_str)) C->cfg_get_str(MOD_ID, "lfmkey", g_deck_key, sizeof g_deck_key, "");
     if (AZ_HAS(C, register_row)) register_rows();
     if (C->register_screen(MOD_ID, &PAGE) != 0) C->log(MOD_ID, "register_screen refused");
     static const az_surface_v1 PANEL = {

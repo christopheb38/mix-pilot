@@ -18,11 +18,19 @@ int net_available(void);
  * Returns the HTTP status (200 = ok), or -1 on a refused URL, a network failure, a body over
  * max bytes or a timeout of `timeout_s`. */
 int net_get(const char *url, char **body, size_t *len, size_t max, int timeout_s);
+/* The last failure in a few words ("curl 60 SSL ...", "HTTP 503", "error 10 Invalid API key"). */
+const char *net_last_error(void);
 /* Percent-encodes s into out (RFC 3986 unreserved kept). */
 void net_escape(const char *s, char *out, size_t n);
 
 /* Last.fm (https://www.last.fm/api). key = your free API key. Each returns the number of
- * results passed to fn, 0 for none, -1 on a failure. fn returns nonzero to stop. */
+ * results passed to fn, 0 for none (Last.fm does not know the song: a normal answer),
+ * LFM_BADKEY when the key is refused, LFM_FAIL when there was no answer. fn returns nonzero
+ * to stop. Titles and artists are cleaned first (lfm_clean). */
+#define LFM_FAIL (-1)
+#define LFM_BADKEY (-2)
+#define LFM_NONE (-3)   /* internal: "not found", reported as 0 results */
+void lfm_clean(const char *artist, const char *title, char *a, size_t an, char *t, size_t tn);
 typedef int (*lfm_pair_fn)(const char *artist, const char *title, double match, void *user);
 typedef int (*lfm_tag_fn)(const char *tag, int count, void *user);
 typedef int (*lfm_artist_fn)(const char *artist, double match, void *user);

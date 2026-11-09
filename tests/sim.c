@@ -104,6 +104,9 @@ static const az_screen_v1 *row_screen;
 static int cfg[16];
 static int cfg_get(const char *id, const char *key, int def) { (void)id; (void)key; return def; }
 static void cfg_set(const char *id, const char *key, int v) { (void)id; (void)key; (void)v; cfg[0]++; }
+static char saved_key[64];
+static int cfg_get_str(const char *id, const char *key, char *buf, int n, const char *def) { (void)id; (void)key; snprintf(buf, (size_t)n, "%s", def); return (int)strlen(buf); }
+static void cfg_set_str(const char *id, const char *key, const char *v) { (void)id; if (!strcmp(key, "lfmkey")) snprintf(saved_key, sizeof saved_key, "%s", v); }
 static int register_row(const char *id, const az_row_v1 *r)
 {
     (void)id;
@@ -168,7 +171,7 @@ static void no_accents(void)
 static void paint(void)
 {
     nscreen = 0;
-    az_rect a = { 10, 458, 1260, 182 };                   /* the bottom panel, 5 tracks (place_panel) */
+    az_rect a = { 10, 522, 1260, 182 };                   /* the bottom panel, 5 tracks (place_panel) */
     surf.on_paint(NULL, a, surf.user);
     no_accents();
 }
@@ -223,7 +226,7 @@ int main(void)
                          .draw_header = draw_header, .draw_text = draw_text, .fill_rect = fill_rect, .draw_rect = draw_rect, .color = color,
                          .row_height = row_height, .text_width = text_width, .request_redraw = request_redraw,
                          .deck_count = deck_count, .data_dir = data_dir, .assets_dir = no_assets,
-                         .register_row = register_row, .cfg_get = cfg_get, .cfg_set = cfg_set, .row_value = row_value, .row_set = row_set,
+                         .register_row = register_row, .cfg_get = cfg_get, .cfg_set = cfg_set, .cfg_get_str = cfg_get_str, .cfg_set_str = cfg_set_str, .row_value = row_value, .row_set = row_set,
                          .lib_playlists = lib_playlists, .lib_tracks = lib_tracks, .view = view,
                          .surface_create = surface_create, .surface_place = surface_place,
                          .surface_show = surface_show, .surface_redraw = surface_redraw, .deck_info = deck_info,
@@ -270,7 +273,7 @@ int main(void)
     /* tap the middle tab (Build up): the tabs sit in the header, right of the "After" line */
     int tapped = 0;
     {
-        az_event t = { AZ_EV_TAP, 0, 10 + 1260 - 330 - 22 - 16 + 165, 458 + 12 };
+        az_event t = { AZ_EV_TAP, 0, 10 + 1260 - 330 - 22 - 16 + 165, 522 + 12 };
         surf.on_input(&t, surf.user);
         run(0.5);
         paint();
@@ -282,13 +285,13 @@ int main(void)
     CHECK(tapped);                                         /* Build up shows another first track */
 
     /* the fold button, top right: one tap folds the panel to a line, another opens it */
-    az_event fold = { AZ_EV_TAP, 0, 10 + 1260 - 8 - 11, 458 + 16 };
+    az_event fold = { AZ_EV_TAP, 0, 10 + 1260 - 8 - 11, 522 + 16 };
     surf.on_input(&fold, surf.user);
     run(0.3);
     nscreen = 0;
-    surf.on_paint(NULL, (az_rect){ 10, 604, 1260, 36 }, surf.user);
+    surf.on_paint(NULL, (az_rect){ 10, 668, 1260, 36 }, surf.user);
     CHECK(screen_has("MIX PILOT  1. ") && !screen_has("Cool down"));
-    az_event unfold = { AZ_EV_TAP, 0, 10 + 1260 - 8 - 11, 604 + 18 };
+    az_event unfold = { AZ_EV_TAP, 0, 10 + 1260 - 8 - 11, 668 + 18 };
     surf.on_input(&unfold, surf.user);
     run(0.3);
     paint();
@@ -360,12 +363,35 @@ int main(void)
         if (pf) { fwrite(g.b, 1, g.len, pf); fclose(pf); }
         free(g.b);
         __atomic_store_n(&lib_ready, 0, __ATOMIC_RELEASE);
-        row_screen->on_input(&knob, row_screen->user);    /* Language -> Reload library */
+        row_screen->on_input(&knob, row_screen->user);    /* Language -> Last.fm key -> Reload library */
+        row_screen->on_input(&knob, row_screen->user);
         row_screen->on_input(&click, row_screen->user);
         run(2.5);
         paint();
         dump("library from the hidden export.pdb");
         CHECK(screen_has("20 brani (pdb)"));               /* Italian is still on: "20 tracks (pdb)" */
+        nscreen = 0;
+        row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+        CHECK(screen_has("OK - 20"));                      /* the Reload row says it is done */
+    }
+
+    /* the Last.fm key typed on the deck: back one row to it, open the pad, 32 presses, OK */
+    {
+        az_event up = { AZ_EV_KNOB, -1, 0, 0 };
+        row_screen->on_input(&up, row_screen->user);
+        row_screen->on_input(&click, row_screen->user);    /* opens the pad */
+        nscreen = 0;
+        row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+        CHECK(screen_has("32 caratteri") && screen_has("0/32"));
+        for (int i = 0; i < 31; i++) row_screen->on_input(&click, row_screen->user);   /* "0" x31 */
+        row_screen->on_input(&click, row_screen->user);    /* the 32nd: the pad moves to OK */
+        row_screen->on_input(&click, row_screen->user);    /* OK */
+        CHECK(strlen(saved_key) == 32 && strspn(saved_key, "0") == 32);
+        run(1.0);
+        nscreen = 0;
+        row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+        CHECK(screen_has("Chiave Last.fm") && screen_has("0000...00"));
+        no_accents();
     }
 
     printf("sim: %s\n", fails ? "FAILED" : "all checks passed");

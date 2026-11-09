@@ -104,50 +104,20 @@ deck*) ; le deck demande **New mod found: allow?**.
 
 ### 2. Activer Last.fm (recommandé)
 
-1. Crée une clé API gratuite : <https://www.last.fm/api/account/create>.
-2. Au premier démarrage, Mix Pilot crée
-   `MODS/community-mods/mix-pilot/data/config.txt` sur ta clé. Ouvre-le sur ton ordinateur :
+1. Crée une clé API gratuite : <https://www.last.fm/api/account/create>. Garde la valeur
+   « API key » (32 caractères, chiffres et lettres a à f), pas le « Shared secret ».
+2. **Sur le deck** : *Mod Menu > Mix Pilot > Clé Last.fm*. Un clavier de 16 touches (0-9, a-f)
+   s'ouvre : molette pour choisir, clic (ou toucher) pour taper, puis **OK**. La clé est gardée
+   par le deck.
+3. Ou **sur ordinateur** : `MODS/community-mods/mix-pilot/data/config.txt` sur la clé USB
+   (créé au premier démarrage du mod), ligne `lastfm_api_key=`. Une clé tapée sur le deck passe
+   avant celle du fichier.
 
-   ```
-   lastfm_api_key=ta_clé_ici
-   pairings_url=
-   ```
-
-3. Remets la clé dans le deck, puis *Mod Menu > Mix Pilot > Reload library*.
-
-Sans clé, sans WiFi ou sans libcurl sur le deck, Mix Pilot marche **hors ligne** (tonalité,
-tempo, playlists, tes enchaînements, fichier communautaire). Les réponses de Last.fm sont mises
-en cache sur la clé (`lastfm-cache.tsv`), donc un morceau déjà vu reste enrichi hors ligne en
-soirée.
-
-## Où le mod trouve ta bibliothèque
-
-1. Par le service d'AZ-MODS, qui lit `PIONEER/rekordbox/exportLibrary.db` (Device Library Plus)
-   d'une clé branchée directement sur USB 1 ou USB 2.
-2. Sinon, Mix Pilot lit lui-même **`export.pdb`**, dans `PIONEER/rekordbox/` ou dans le dossier
-   **caché `.PIONEER/rekordbox/`**, où rekordbox range parfois la bibliothèque (sur une clé au
-   format Mac, par exemple). Ce format est documenté publiquement et n'est pas chiffré. Il apporte
-   en plus le **genre** rekordbox de chaque morceau, utilisé pour le style. La ligne du bas
-   indique alors « (pdb) » après le nombre de morceaux.
-
-Si rien n'est trouvé, le panneau dit pourquoi :
-
-| Message | Que faire |
-|---|---|
-| *No exportLibrary.db: export with Device Library Plus* | la clé n'a que l'ancien format `export.pdb` : réexporte-la depuis rekordbox 7 avec Device Library Plus |
-| *USB port not recognized: plug the stick straight in* | la clé passe par un hub ou un adaptateur : branche-la directement |
-| *Library is in the hidden .PIONEER folder* | la bibliothèque est dans `.PIONEER/rekordbox/` mais sans `export.pdb` lisible : réexporte la clé depuis rekordbox |
-| *USB stick found, but no rekordbox export on it* | la clé n'a pas de dossier `PIONEER/rekordbox` : la musique y a été copiée sans passer par l'export de rekordbox |
-| *The deck sees no USB stick* | aucune clé montée par le deck |
-| *Library refused by the deck (codes below)* | envoie-nous la ligne du bas (`USB1 -1/-1 ... sda1:db p1 P+ R5`) |
-
-La ligne du bas se lit ainsi : `sda1` la clé, `db` / `pdb` / `-` les fichiers de bibliothèque
-trouvés, `p1` le port (0 = non reconnu), `P+` le dossier `PIONEER` présent, `R5` le nombre de
-fichiers dans `PIONEER/rekordbox` (`R-1` = dossier absent), `H:db` une bibliothèque dans le
-dossier caché `.PIONEER/rekordbox`.
-
-Les textes sont écrits sans accents : la police du deck ne les affiche pas. Les titres et
-artistes de ta clé sont convertis de la même façon à l'affichage (é → e, ß → ss…).
+En bas du panneau : « Last.fm actif » quand tout va bien, « clé refusée » si la clé est fausse,
+« injoignable (…) » avec la raison (code réseau) sinon. Mix Pilot interroge Last.fm avec le
+titre de base (« Be My Lover » pour « Be My Lover (Extended Mix By …) ») et le premier artiste.
+Un morceau que Last.fm ne connaît pas n'est pas une erreur. Sans clé ni WiFi, tout marche hors
+ligne ; les réponses sont gardées dans `lastfm-cache.tsv` sur la clé.
 
 ## Réglages
 
@@ -166,7 +136,8 @@ pour choisir une ligne, clique (ou touche-la) pour changer sa valeur, BACK pour 
 | Learn my transitions | enregistre tes enchaînements |
 | Online (Last.fm) | coupe tout accès réseau |
 | Language | English, Français, Español, Deutsch, Italiano |
-| Reload library | relit la clé, `config.txt` et les fichiers d'enchaînements |
+| Clé Last.fm | la clé API, tapée sur un clavier 0-9 / a-f |
+| Reload library | relit la clé, `config.txt` et les fichiers d'enchaînements ; la ligne affiche « lecture… » puis « OK - nombre de morceaux » |
 
 ## Développement
 
@@ -198,9 +169,9 @@ Last.fm (au plus ~5 requêtes/s, pause de 30 s si le réseau tombe).
 
 ## À savoir / limites (v0.1, bêta)
 
-- **Premiers tests sur deck en cours.** Le moteur, la simulation et le harnais du SDK passent,
-  mais l'emplacement du panneau (x = droite ou gauche, y = 90, 470 px de large) est à ajuster
-  selon ce qu'il cache sur l'écran BROWSE.
+- Le panneau se pose **par-dessus** la liste de morceaux : les mods peuvent dessiner sur l'écran,
+  pas réduire la liste du deck. En bas, il couvre les dernières lignes ; le bouton « – » le
+  replie sur une ligne.
 - Le deck ne fournit pas la tonalité du morceau en cours : elle vient de la bibliothèque
   rekordbox, donc un morceau joué hors bibliothèque n'a pas de suggestions.
 - Le mod ne peut pas charger un morceau tout seul dans un deck (pas d'API pour ça) : il te dit

@@ -13,8 +13,9 @@ enum {
     T_SHOW, T_RELOAD, T_PANEL, T_MODE, T_COUNT, T_FLOW, T_REF, T_ARTIST, T_LEARN, T_ONLINE, T_LANG,
     T_RIGHT, T_LEFT, T_BOTTOM, T_HIDDEN, T_OFF, T_ON, T_NEXT, T_CHAIN, T_SMOOTH, T_UP, T_DOWN, T_AUTO, T_DECK,
     T_HDR_NEXT, T_HDR_CHAIN, T_READING, T_NOLIB, T_PLAY, T_NOTIN, T_AFTER, T_PLAN, T_MIXED, T_SIMILAR,
-    T_IN, T_TRACKS, T_KNOWN, T_NET_KEY, T_NET_OFFLINE, T_NET_ON, T_NET_FAIL, T_NET_DISABLED, T_BANNER,
-    T_LOVE, T_SUGG_TITLE, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT, T_D_HIDDEN, T_N
+    T_IN, T_TRACKS, T_KNOWN, T_NET_KEY, T_NET_OFFLINE, T_NET_ON, T_NET_FAIL, T_NET_BADKEY, T_NET_DISABLED, T_BANNER,
+    T_LOVE, T_SUGG_TITLE, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT, T_D_HIDDEN, T_KEY, T_KEY_NONE, T_KEY_HINT,
+    T_KEY_BAD, T_DEL, T_CLEAR, T_OK, T_CANCEL, T_RELOADING, T_N
 };
 
 /* Plain ASCII only: the deck's font draws no accented letters (boxes or wrong glyphs). */
@@ -70,6 +71,8 @@ static const char *const TR[T_N][LANG_N] = {
     [T_NET_OFFLINE] = { "offline", "hors ligne", "sin conexion", "offline", "offline" },
     [T_NET_ON] = { "Last.fm on", "Last.fm actif", "Last.fm activo", "Last.fm an", "Last.fm attivo" },
     [T_NET_FAIL] = { "Last.fm unreachable", "Last.fm injoignable", "Last.fm inaccesible", "Last.fm nicht erreichbar", "Last.fm non raggiungibile" },
+    [T_NET_BADKEY] = { "Last.fm: key refused", "Last.fm : cle refusee", "Last.fm: clave rechazada",
+                       "Last.fm: Schluessel abgelehnt", "Last.fm: chiave rifiutata" },
     [T_NET_DISABLED] = { "online off", "en ligne desactive", "en linea desactivado", "online aus", "online disattivato" },
     [T_BANNER] = { "Mix Pilot: reading the library again", "Mix Pilot : relecture de la bibliotheque",
                    "Mix Pilot: releyendo la biblioteca", "Mix Pilot: Bibliothek wird neu gelesen", "Mix Pilot: rilettura della libreria" },
@@ -101,6 +104,22 @@ static const char *const TR[T_N][LANG_N] = {
                      "Biblioteca en la carpeta oculta .PIONEER",
                      "Bibliothek im versteckten Ordner .PIONEER",
                      "Libreria nella cartella nascosta .PIONEER" },
+    [T_KEY] = { "Last.fm key", "Cle Last.fm", "Clave Last.fm", "Last.fm-Schluessel", "Chiave Last.fm" },
+    [T_KEY_NONE] = { "none", "aucune", "ninguna", "keine", "nessuna" },
+    [T_KEY_HINT] = { "32 characters, 0-9 and a-f: free key at last.fm/api",
+                     "32 caracteres, 0-9 et a-f : cle gratuite sur last.fm/api",
+                     "32 caracteres, 0-9 y a-f: clave gratis en last.fm/api",
+                     "32 Zeichen, 0-9 und a-f: kostenloser Schluessel auf last.fm/api",
+                     "32 caratteri, 0-9 e a-f: chiave gratuita su last.fm/api" },
+    [T_KEY_BAD] = { "A key has 32 characters (empty = remove it)", "Une cle fait 32 caracteres (vide = la retirer)",
+                    "Una clave tiene 32 caracteres (vacia = quitarla)",
+                    "Ein Schluessel hat 32 Zeichen (leer = entfernen)",
+                    "Una chiave ha 32 caratteri (vuota = rimuoverla)" },
+    [T_DEL] = { "Delete", "Effacer", "Borrar", "Loeschen", "Cancella" },
+    [T_CLEAR] = { "Clear all", "Tout effacer", "Borrar todo", "Alles loeschen", "Cancella tutto" },
+    [T_OK] = { "OK", "OK", "OK", "OK", "OK" },
+    [T_CANCEL] = { "Cancel", "Annuler", "Cancelar", "Abbrechen", "Annulla" },
+    [T_RELOADING] = { "reading...", "lecture...", "leyendo...", "liest...", "lettura..." },
 };
 
 #endif

@@ -112,7 +112,7 @@ clean:
 engine-test:
 	@mkdir -p $(OUT)
 	$(TEST_CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
-	    -o $(OUT)/engine_test tests/engine_test.c engine.c minijson.c pdb.c -lm
+	    -o $(OUT)/engine_test tests/engine_test.c engine.c minijson.c pdb.c online.c -lm -ldl -lpthread
 	$(OUT)/engine_test
 
 SIM_FLAGS := -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \

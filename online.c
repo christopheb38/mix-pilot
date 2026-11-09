@@ -18,6 +18,7 @@ typedef int (*easy_setopt_fn)(CURL *, int, ...);
 typedef int (*easy_perform_fn)(CURL *);
 typedef int (*easy_getinfo_fn)(CURL *, int, ...);
 typedef void (*easy_cleanup_fn)(CURL *);
+typedef const char *(*easy_strerror_fn)(int);
 
 #define O_WRITEDATA 10001
 #define O_URL 10002
@@ -42,8 +43,17 @@ static struct {
     easy_perform_fn perform;
     easy_getinfo_fn getinfo;
     easy_cleanup_fn cleanup;
+    easy_strerror_fn strerror_;
 } cu;
 static pthread_mutex_t cu_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* The last failure, in a few words, for the screen ("curl 60 ...", "HTTP 503"). Net thread only. */
+static char g_last_err[96];
+
+const char *net_last_error(void)
+{
+    return g_last_err;
+}
 
 int net_available(void)
 {
@@ -59,6 +69,7 @@ int net_available(void)
             cu.perform = (easy_perform_fn)dlsym(h, "curl_easy_perform");
             cu.getinfo = (easy_getinfo_fn)dlsym(h, "curl_easy_getinfo");
             cu.cleanup = (easy_cleanup_fn)dlsym(h, "curl_easy_cleanup");
+            cu.strerror_ = (easy_strerror_fn)dlsym(h, "curl_easy_strerror");
             cu.ok = cu.init && cu.setopt && cu.perform && cu.getinfo && cu.cleanup;
         }
     }
@@ -119,9 +130,12 @@ int net_get(const char *url, char **body, size_t *len, size_t max, int timeout_s
     cu.getinfo(c, I_RESPONSE_CODE, &code);
     cu.cleanup(c);
     if (rc != 0 || s.over || !s.b) {
+        if (rc != 0) snprintf(g_last_err, sizeof g_last_err, "curl %d %s", rc, cu.strerror_ ? cu.strerror_(rc) : "");
+        else snprintf(g_last_err, sizeof g_last_err, s.over ? "answer too big" : "empty answer");
         free(s.b);
         return -1;
     }
+    if (code != 200) snprintf(g_last_err, sizeof g_last_err, "HTTP %ld", code);
     *body = s.b;
     if (len) *len = s.n;
     return (int)code;
@@ -147,27 +161,66 @@ void net_escape(const char *s, char *out, size_t n)
 
 #define LFM "https://ws.audioscrobbler.com/2.0/?format=json&autocorrect=1"
 
+/* 0 = a document in *d; LFM_NONE = Last.fm answered "not found" (a normal answer: no results);
+ * LFM_BADKEY = the API key is refused; LFM_FAIL = no answer (network, HTTP, garbage). */
 static int lfm_get(const char *url, mj_doc *d, char **body)
 {
     size_t len;
     int code = net_get(url, body, &len, 2u << 20, 12);
-    if (code != 200 || !*body) {
+    if (!*body) return LFM_FAIL;
+    if (mj_parse(d, *body, len) != 0) {                   /* not JSON: an error page */
         free(*body);
         *body = NULL;
-        return -1;
+        if (code == 200) snprintf(g_last_err, sizeof g_last_err, "not JSON");
+        return LFM_FAIL;
     }
-    if (mj_parse(d, *body, len) != 0 || mj_get(d, 0, "error") >= 0) {
-        mj_free(d);
-        free(*body);
-        *body = NULL;
-        return -1;
+    int e = mj_get(d, 0, "error");
+    if (e < 0 && code == 200) return 0;
+    int err = (int)mj_num(d, e);
+    char msg[64] = "";
+    mj_str(d, mj_get(d, 0, "message"), msg, sizeof msg);
+    mj_free(d);
+    free(*body);
+    *body = NULL;
+    snprintf(g_last_err, sizeof g_last_err, "error %d %s", err, msg);
+    if (err == 6 || err == 7) return LFM_NONE;            /* track / artist not found */
+    if (err == 10 || err == 26) return LFM_BADKEY;        /* invalid or suspended API key */
+    return LFM_FAIL;
+}
+
+/* What Last.fm knows a song by: the title without its version notes ("(Extended Mix By X)",
+ * "[Radio Edit]", " - Club Mix") and the first artist only ("A feat. B", "A & B", "A, B"). */
+void lfm_clean(const char *artist, const char *title, char *a, size_t an, char *t, size_t tn)
+{
+    size_t o = 0;
+    int depth = 0;
+    for (const char *p = title ? title : ""; *p && o + 1 < tn; p++) {
+        if (*p == '(' || *p == '[') { depth++; continue; }
+        if ((*p == ')' || *p == ']') && depth) { depth--; continue; }
+        if (depth) continue;
+        if (p[0] == ' ' && p[1] == '-' && p[2] == ' ') break;   /* "Song - Club Mix" */
+        t[o++] = *p;
     }
-    return 0;
+    while (o && t[o - 1] == ' ') o--;
+    t[o] = '\0';
+    if (!t[0] && title) snprintf(t, tn, "%s", title);
+    snprintf(a, an, "%s", artist ? artist : "");
+    static const char *const cut[] = { " feat", " Feat", " FEAT", " ft.", " Ft.", " ft ", " Ft ", ",", " & ", " x ",
+                                       " X ", " vs", " Vs", " VS", " and ", NULL };
+    for (int i = 0; cut[i]; i++) {
+        char *f = strstr(a, cut[i]);
+        if (f && f != a) *f = '\0';
+    }
 }
 
 int lfm_similar_tracks(const char *key, const char *artist, const char *title, int limit,
                        lfm_pair_fn fn, void *user)
 {
+    char ca[160], ct[200];
+    lfm_clean(artist, title, ca, sizeof ca, ct, sizeof ct);
+    artist = ca;
+    title = ct;
+
     char ea[256], et[384], ek[96], url[900];
     net_escape(artist, ea, sizeof ea);
     net_escape(title, et, sizeof et);
@@ -176,7 +229,8 @@ int lfm_similar_tracks(const char *key, const char *artist, const char *title, i
              ea, et, limit, ek);
     mj_doc d;
     char *body;
-    if (lfm_get(url, &d, &body)) return -1;
+    int st = lfm_get(url, &d, &body);
+    if (st) return st == LFM_NONE ? 0 : st;
     int arr = mj_path(&d, 0, "similartracks.track"), n = 0;
     for (int i = 0; i < mj_len(&d, arr); i++) {
         int e = mj_at(&d, arr, i);
@@ -195,13 +249,18 @@ int lfm_similar_tracks(const char *key, const char *artist, const char *title, i
 
 int lfm_similar_artists(const char *key, const char *artist, int limit, lfm_artist_fn fn, void *user)
 {
+    char ca[160], ct[8];
+    lfm_clean(artist, "", ca, sizeof ca, ct, sizeof ct);
+    artist = ca;
+
     char ea[256], ek[96], url[700];
     net_escape(artist, ea, sizeof ea);
     net_escape(key, ek, sizeof ek);
     snprintf(url, sizeof url, LFM "&method=artist.getsimilar&artist=%s&limit=%d&api_key=%s", ea, limit, ek);
     mj_doc d;
     char *body;
-    if (lfm_get(url, &d, &body)) return -1;
+    int st = lfm_get(url, &d, &body);
+    if (st) return st == LFM_NONE ? 0 : st;
     int arr = mj_path(&d, 0, "similarartists.artist"), n = 0;
     for (int i = 0; i < mj_len(&d, arr); i++) {
         int e = mj_at(&d, arr, i);
@@ -220,7 +279,8 @@ static int tags_from(const char *url, lfm_tag_fn fn, void *user)
 {
     mj_doc d;
     char *body;
-    if (lfm_get(url, &d, &body)) return -1;
+    int st = lfm_get(url, &d, &body);
+    if (st) return st == LFM_NONE ? 0 : st;
     int arr = mj_path(&d, 0, "toptags.tag"), n = 0;
     for (int i = 0; i < mj_len(&d, arr); i++) {
         int e = mj_at(&d, arr, i);
@@ -238,6 +298,11 @@ static int tags_from(const char *url, lfm_tag_fn fn, void *user)
 
 int lfm_track_tags(const char *key, const char *artist, const char *title, lfm_tag_fn fn, void *user)
 {
+    char ca[160], ct[200];
+    lfm_clean(artist, title, ca, sizeof ca, ct, sizeof ct);
+    artist = ca;
+    title = ct;
+
     char ea[256], et[384], ek[96], url[900];
     net_escape(artist, ea, sizeof ea);
     net_escape(title, et, sizeof et);
@@ -248,6 +313,10 @@ int lfm_track_tags(const char *key, const char *artist, const char *title, lfm_t
 
 int lfm_artist_tags(const char *key, const char *artist, lfm_tag_fn fn, void *user)
 {
+    char ca[160], ct[8];
+    lfm_clean(artist, "", ca, sizeof ca, ct, sizeof ct);
+    artist = ca;
+
     char ea[256], ek[96], url[700];
     net_escape(artist, ea, sizeof ea);
     net_escape(key, ek, sizeof ek);

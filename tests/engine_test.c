@@ -7,6 +7,7 @@
 #include "../engine.h"
 #include "../minijson.h"
 #include "../pdb.h"
+#include "../online.h"
 #include "pdbgen.h"
 
 static int fails, checks;
@@ -323,6 +324,19 @@ static void pdbfile(void)
     free(g.b);
 }
 
+static void lastfm_names(void)
+{
+    char a[160], t[200];
+    lfm_clean("La Bouche", "Be My Lover (Extended Mix By Fuvi Clan)", a, sizeof a, t, sizeof t);
+    CHECK(strcmp(a, "La Bouche") == 0 && strcmp(t, "Be My Lover") == 0);
+    lfm_clean("Ozuna Feat. Manuel Turizo", "Vaina Loca [Extended Mix]", a, sizeof a, t, sizeof t);
+    CHECK(strcmp(a, "Ozuna") == 0 && strcmp(t, "Vaina Loca") == 0);
+    lfm_clean("Daddy Yankee & Katy Perry ft Snow", "Con Calma - Club Mix", a, sizeof a, t, sizeof t);
+    CHECK(strcmp(a, "Daddy Yankee") == 0 && strcmp(t, "Con Calma") == 0);
+    lfm_clean("Don Omar, Tego Calderon", "(Intro)", a, sizeof a, t, sizeof t);
+    CHECK(strcmp(a, "Don Omar") == 0 && strcmp(t, "(Intro)") == 0);   /* nothing left: keep it */
+}
+
 int main(void)
 {
     keys();
@@ -334,6 +348,7 @@ int main(void)
     big();
     json();
     pdbfile();
+    lastfm_names();
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;
 }
