@@ -282,6 +282,14 @@ static int seen_entry(uint32_t pl, uint32_t tr, uint32_t idx, void *u)
     return 0;
 }
 
+static int hist_seen(uint32_t hist, uint32_t track, uint32_t index, void *u)
+{
+    struct { uint32_t tr[8]; int n; } *h = u;
+    if (hist == 1 && index >= 1 && index <= 8) h->tr[index - 1] = track;
+    h->n++;
+    return 0;
+}
+
 static int count_only(const pdb_track *t, void *u) { (void)t; (*(int *)u)++; return 0; }
 
 static void pdbfile(void)
@@ -296,6 +304,11 @@ static void pdbfile(void)
     CHECK(strcmp(s.t1_genre, "Reggaeton") == 0 && strcmp(s.t2_key, "Em") == 0);
     CHECK(fabs(s.t20_bpm - 129.5) < 1e-9 && s.t20_len == 219);
     CHECK(s.nfold == 1 && s.npl == 2 && s.nent == 20 && s.latino_entries == 10);
+
+    /* the play history: tracks 1 -> 5 -> 9 */
+    struct { uint32_t tr[8]; int n; } hs = { { 0 }, 0 };
+    CHECK(pdb_history(g.b, g.len, hist_seen, &hs) == 3);
+    CHECK(hs.n == 3 && hs.tr[0] == 1 && hs.tr[1] == 5 && hs.tr[2] == 9);
 
     /* not a pdb */
     CHECK(pdb_read(g.b, 100, NULL, NULL, NULL, NULL) == -1);
@@ -316,6 +329,7 @@ static void pdbfile(void)
         }
         int n = 0;
         pdb_read(copy, g.len, count_only, NULL, NULL, &n);
+        pdb_history(copy, g.len, NULL, NULL);
         CHECK(n >= 0 && n <= 8 * 2000);              /* garbage row counts stay inside their page */
     }
     /* a truncated file too */

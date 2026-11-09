@@ -21,8 +21,9 @@ from your own sets.
   *Cool down* (bring it down).
 - **Two modes**: *Next tracks* (the best tracks to play right after) and *Chain* (an ordered
   plan of several tracks, each mixing into the next).
-- **Known transitions**: the transitions you play are remembered and suggested again, and a
-  community pairings file can be shared.
+- **Known transitions**: the transitions you play are remembered and suggested again, and every
+  deck shares the [community pairings file](https://github.com/christopheb38/mix-pilot-pairings):
+  transitions DJs really play, contributed by Mix Pilot users.
 - **Works offline.** With a free Last.fm API key and WiFi, it also uses style tags and
   "similar tracks" from Last.fm.
 - **Five languages**: English, French, Spanish, German, Italian.
@@ -192,6 +193,7 @@ All settings are on the Mix Pilot page (**Mod Menu > Mix Pilot**) and are kept b
 | **Follow** | Auto, Deck 1, Deck 2, Deck 3, Deck 4 | Auto |
 | **Avoid same artist** | On, Off | On |
 | **Learn my transitions** | On, Off | On |
+| **Learn from rekordbox history** | On, Off: also count the transitions in the play histories saved on the stick (see below) | Off |
 | **Online (Last.fm)** | On, Off (Off: no network access at all) | On |
 | **Language** | English, Francais, Espanol, Deutsch, Italiano | English |
 | **Last.fm key** | your API key, typed on a 0-9 / a-f keypad | none |
@@ -254,30 +256,52 @@ once stays enriched offline, at a gig without WiFi.
 
 ## Known transitions and the pairings file
 
-Mix Pilot can tell you that "everybody plays B after A". It gets that from three places:
+Mix Pilot can tell you that "everybody plays B after A". It gets that from four places:
 
 1. **Your own sets.** When a track has played for 40 seconds after another one, Mix Pilot writes
    the transition to `my-transitions.tsv` on your stick (turn this off with **Learn my
    transitions**). Next time, that transition comes up in **blue**, with `mixed 2x`.
-2. **The community pairings file.** `assets/pairings.tsv`, shipped with the mod, plus an
-   optional file downloaded from a URL you choose (`pairings_url` in `config.txt`, HTTPS only).
-3. **Last.fm similar tracks** (listener co-occurrence), when online.
+2. **Your rekordbox history** (optional, **Learn from rekordbox history**, off by default). The
+   players save play histories on the stick (rekordbox's HISTORY playlists); Mix Pilot counts each
+   track that followed another in them as a played transition. It is off by default because it
+   brings your past sets back: leave it off when you want fresh ideas. It needs the library read
+   from `export.pdb` (see [Where Mix Pilot finds your library](#where-mix-pilot-finds-your-library)).
+3. **The community pairings file**, shared by every deck:
+   [**christopheb38/mix-pilot-pairings**](https://github.com/christopheb38/mix-pilot-pairings).
+   Mix Pilot downloads it at start and on **Reload library** while **Online (Last.fm)** is on
+   (no Last.fm key needed for it), and `assets/pairings.tsv` ships with the mod.
+4. **Last.fm similar tracks** (listener co-occurrence), with a Last.fm key.
 
-All pairings files use the same format, so you can share your own transitions: publish your
-`my-transitions.tsv`, or add its lines to a shared file. One transition per line, tab-separated:
+### Share your transitions with everybody
+
+The more DJs share, the better the suggestions get for all. Your transitions are in
+`MODS/community-mods/mix-pilot/data/my-transitions.tsv` on your stick:
+
+- open a **pull request** on [mix-pilot-pairings](https://github.com/christopheb38/mix-pilot-pairings)
+  that adds your lines to `pairings.tsv` (an automatic check validates the format), or
+- open an **issue** there titled *My transitions* and attach the file: it will be merged for you.
+
+### The format
+
+All pairings files use the same format: one transition per line, tab-separated.
 
 ```
 From artist	From title	To artist	To title	count	date
 ```
 
-`count` and `date` are optional. Lines starting with `#` are comments. Titles are matched
-loosely: `(Original Mix)`, `(Extended Mix)`, `feat. X`, case and accents do not matter, but a
-named remix (`(Fisher Remix)`) is a different track.
+`count` (1 to 50) and `date` are optional. Lines starting with `#` are comments. Titles are
+matched loosely: `(Original Mix)`, `(Extended Mix)`, `feat. X`, case and accents do not matter,
+but a named remix (`(Fisher Remix)`) is a different track.
 
-To use a shared file, put its address in `config.txt`, then choose **Reload library**:
+### Another file, or none
+
+`pairings_url` in `config.txt` chooses the shared file: empty uses the community file, an
+`https://` address uses yours (for example your crew's own list), `off` uses none. Then choose
+**Reload library**.
 
 ```
 pairings_url=https://raw.githubusercontent.com/someone/pairings/main/pairings.tsv
+pairings_url=off
 ```
 
 <br>
@@ -327,8 +351,8 @@ created by AZ-MODS, kept when the mod is updated, and deleted when the mod is re
 | File | Contents |
 |---|---|
 | `config.txt` | `lastfm_api_key=` and `pairings_url=` (created on the first run) |
-| `my-transitions.tsv` | the transitions you played (pairings format, one line each) |
-| `community.tsv` | the pairings file downloaded from `pairings_url` |
+| `my-transitions.tsv` | the transitions you played (pairings format, one line each): share it! |
+| `community.tsv` | the community pairings file (or your `pairings_url`), as last downloaded |
 | `lastfm-cache.tsv` | Last.fm answers, so they are not asked twice (reset past 8 MB) |
 
 All of these are plain text: you can open, edit, back up or delete them on a computer.
@@ -339,7 +363,8 @@ All of these are plain text: you can open, edit, back up or delete them on a com
 
 - Mix Pilot uses the network **only** with **Online (Last.fm)** on, and only for:
   - **Last.fm** (`ws.audioscrobbler.com`): the artist and title of tracks, and your API key;
-  - the **pairings URL** you set in `config.txt`, if any.
+  - the **community pairings file** on GitHub (`raw.githubusercontent.com`), or the
+    `pairings_url` you set in `config.txt` (`off` for none).
 - Everything goes over **HTTPS**, through the deck's own libcurl, outside the audio path, with
   timeouts and size limits. If the network is down, Mix Pilot waits and tries again later; the
   suggestions keep working offline.

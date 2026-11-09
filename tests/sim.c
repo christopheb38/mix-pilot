@@ -251,7 +251,7 @@ int main(void)
     for (int i = 0; i < nscreen; i++) printf("  | %s\n", screen_text[i]);
     CHECK(screen_has("Energy") && screen_has("Smooth") && screen_has("Follow"));
     CHECK(screen_has("@blinkevents38") && screen_has("@christopheb_38") && screen_has("Follow us"));
-    CHECK(screen_has("Language") && screen_has("English"));
+    CHECK(screen_has("Learn from rekordbox history"));     /* the rows below scroll into view with the knob */
 
     pthread_mutex_lock(&mu);
     D[0].loaded = 1; D[0].lib = 0; D[0].playing = 1;      /* Opening Groove, Am 122 */
@@ -333,10 +333,10 @@ int main(void)
     dump("chain after Opening Groove (deck 2)");
     CHECK(screen_has("Plan after D2: Opening Groove"));
 
-    /* the page: turn to Language (item 9: suggestions, 8 settings), click -> Francais */
+    /* the page: turn to Language (item 10: suggestions, then 9 settings before it), click -> Francais */
     az_event knob = { AZ_EV_KNOB, 1, 0, 0 }, click = { AZ_EV_CLICK, 0, 0, 0 };
     row_screen->on_enter(row_screen->user);
-    for (int i = 0; i < 9; i++) row_screen->on_input(&knob, row_screen->user);
+    for (int i = 0; i < 10; i++) row_screen->on_input(&knob, row_screen->user);
     row_screen->on_input(&click, row_screen->user);
     run(1.0);
     nscreen = 0;
@@ -363,6 +363,12 @@ int main(void)
         if (pf) { fwrite(g.b, 1, g.len, pf); fclose(pf); }
         free(g.b);
         __atomic_store_n(&lib_ready, 0, __ATOMIC_RELEASE);
+        az_event back2 = { AZ_EV_KNOB, -1, 0, 0 };          /* Language -> Online -> rekordbox history: on */
+        row_screen->on_input(&back2, row_screen->user);
+        row_screen->on_input(&back2, row_screen->user);
+        row_screen->on_input(&click, row_screen->user);
+        row_screen->on_input(&knob, row_screen->user);
+        row_screen->on_input(&knob, row_screen->user);
         row_screen->on_input(&knob, row_screen->user);    /* Language -> Last.fm key -> Reload library */
         row_screen->on_input(&knob, row_screen->user);
         row_screen->on_input(&click, row_screen->user);
@@ -370,6 +376,7 @@ int main(void)
         paint();
         dump("library from the hidden export.pdb");
         CHECK(screen_has("20 brani (pdb)"));               /* Italian is still on: "20 tracks (pdb)" */
+        CHECK(screen_has("4 passaggi noti"));              /* 2 learned + the history's 1 -> 5 -> 9 */
         nscreen = 0;
         row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
         CHECK(screen_has("OK - 20"));                      /* the Reload row says it is done */

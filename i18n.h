@@ -10,7 +10,7 @@ enum { LANG_EN = 0, LANG_FR, LANG_ES, LANG_DE, LANG_IT, LANG_N };
 static const char *const LANG_NAMES[LANG_N] = { "English", "Francais", "Espanol", "Deutsch", "Italiano" };
 
 enum {
-    T_SHOW, T_RELOAD, T_PANEL, T_MODE, T_COUNT, T_FLOW, T_REF, T_ARTIST, T_LEARN, T_ONLINE, T_LANG,
+    T_SHOW, T_RELOAD, T_PANEL, T_MODE, T_COUNT, T_FLOW, T_REF, T_ARTIST, T_LEARN, T_HISTORY, T_ONLINE, T_LANG,
     T_RIGHT, T_LEFT, T_BOTTOM, T_HIDDEN, T_OFF, T_ON, T_NEXT, T_CHAIN, T_SMOOTH, T_UP, T_DOWN, T_AUTO, T_DECK,
     T_HDR_NEXT, T_HDR_CHAIN, T_READING, T_NOLIB, T_PLAY, T_NOTIN, T_AFTER, T_PLAN, T_MIXED, T_SIMILAR,
     T_IN, T_TRACKS, T_KNOWN, T_NET_KEY, T_NET_OFFLINE, T_NET_ON, T_NET_FAIL, T_NET_BADKEY, T_NET_DISABLED, T_BANNER,
@@ -33,6 +33,9 @@ static const char *const TR[T_N][LANG_N] = {
                    "Gleichen Artist meiden", "Evita stesso artista" },
     [T_LEARN] = { "Learn my transitions", "Apprendre mes enchainements", "Aprender mis transiciones",
                   "Meine Uebergaenge lernen", "Impara i miei passaggi" },
+    [T_HISTORY] = { "Learn from rekordbox history", "Apprendre de l'historique rekordbox",
+                    "Aprender del historial rekordbox", "Aus rekordbox-Verlauf lernen",
+                    "Impara dalla cronologia rekordbox" },
     [T_ONLINE] = { "Online (Last.fm)", "En ligne (Last.fm)", "En linea (Last.fm)", "Online (Last.fm)", "Online (Last.fm)" },
     [T_LANG] = { "Language", "Langue", "Idioma", "Sprache", "Lingua" },
     [T_RIGHT] = { "Right", "Droite", "Derecha", "Rechts", "Destra" },

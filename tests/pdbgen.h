@@ -2,7 +2,7 @@
  *
  * pdbgen.h: builds a small synthetic export.pdb in memory, for the tests (no user library is
  * ever committed). One page per table: genres, keys, artists, albums, tracks, playlist tree,
- * playlist entries. It covers the format's corners: short ASCII and long UTF-16 strings, an
+ * playlist entries, history entries. It covers the format's corners: short ASCII and long UTF-16 strings, an
  * artist row with a far name offset (subtype 0x64), and more than 16 rows on a page.
  */
 #ifndef MIXPILOT_PDBGEN_H
@@ -103,14 +103,14 @@ static pdbgen pg_build(void)
 {
     pdbgen g;
     memset(&g, 0, sizeof g);
-    g.len = 8 * PG;
+    g.len = 9 * PG;
     g.b = calloc(1, g.len);
     unsigned char *h = g.b;
     pg_w32(h + 4, PG);
-    pg_w32(h + 8, 7);
-    pg_w32(h + 12, 8);
-    static const uint32_t types[7] = { 1, 5, 2, 3, 0, 7, 8 };
-    for (int t = 0; t < 7; t++) {
+    pg_w32(h + 8, 8);
+    pg_w32(h + 12, 9);
+    static const uint32_t types[8] = { 1, 5, 2, 3, 0, 7, 8, 12 };
+    for (int t = 0; t < 8; t++) {
         unsigned char *e = h + 0x1c + 16 * t;
         pg_w32(e, types[t]);
         pg_w32(e + 4, 0);
@@ -153,6 +153,12 @@ static pdbgen pg_build(void)
     for (int i = 0; i < 20; i++) {
         memset(r, 0, sizeof r); pg_w32(r, (uint32_t)(i % 10) + 1); pg_w32(r + 4, (uint32_t)i + 1);
         pg_w32(r + 8, i < 10 ? 2 : 3); pg_row(&g, 7, r, 12);
+    }
+    /* a play history (page 8): tracks 1, 5, 9 in that order (track, history, position) */
+    static const uint32_t hist[3] = { 1, 5, 9 };
+    for (int i = 0; i < 3; i++) {
+        memset(r, 0, sizeof r); pg_w32(r, hist[i]); pg_w32(r + 4, 1); pg_w32(r + 8, (uint32_t)i + 1);
+        pg_row(&g, 8, r, 12);
     }
     return g;
 }

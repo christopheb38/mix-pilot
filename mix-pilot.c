@@ -53,6 +53,8 @@
 #define REF_STABLE_S 6.0        /* a deck must play this long before it becomes the reference */
 #endif
 #define CACHE_MAX (8u << 20)    /* lastfm-cache.tsv is reset past this size */
+/* The community pairings file every deck uses unless config.txt says otherwise ("off" = none). */
+#define DEFAULT_PAIRINGS_URL "https://raw.githubusercontent.com/christopheb38/mix-pilot-pairings/main/pairings.tsv"
 
 static const az_core_v1 *C;
 
@@ -62,14 +64,15 @@ static const az_core_v1 *C;
 
 #include "i18n.h"
 
-enum { S_PANEL, S_MODE, S_COUNT, S_FLOW, S_REF, S_ARTIST, S_LEARN, S_ONLINE, S_LANG, S_N };
+enum { S_PANEL, S_MODE, S_COUNT, S_FLOW, S_REF, S_ARTIST, S_LEARN, S_HISTORY, S_ONLINE, S_LANG, S_N };
 static const struct {
     const char *key;
     int label, def, n;
 } SET[S_N] = {
     { "panel", T_PANEL, 2, 4 }, { "mode", T_MODE, 0, 2 },     { "count", T_COUNT, 1, 4 },
     { "flow", T_FLOW, 0, 3 },   { "ref", T_REF, 0, 5 },       { "artist", T_ARTIST, 1, 2 },
-    { "learn", T_LEARN, 1, 2 }, { "online", T_ONLINE, 1, 2 }, { "lang", T_LANG, 0, LANG_N },
+    { "learn", T_LEARN, 1, 2 }, { "history", T_HISTORY, 0, 2 }, { "online", T_ONLINE, 1, 2 },
+    { "lang", T_LANG, 0, LANG_N },
 };
 static atomic_int g_set[S_N];
 static const int COUNTS[] = { 4, 5, 8, 10 };
@@ -290,6 +293,7 @@ static void read_config(void)
     if (!f) {
         pthread_mutex_lock(&g_net_mu);
         if (g_deck_key[0]) snprintf(g_cfg_key, sizeof g_cfg_key, "%s", g_deck_key);
+        snprintf(g_cfg_url, sizeof g_cfg_url, "%s", DEFAULT_PAIRINGS_URL);
         pthread_mutex_unlock(&g_net_mu);
         f = fopen(p, "we");
         if (f) {
@@ -299,7 +303,9 @@ static void read_config(void)
                   "#   https://www.last.fm/api/account/create\n"
                   "lastfm_api_key=\n"
                   "#\n"
-                  "# Optional shared pairings file, https:// only, same format as my-transitions.tsv:\n"
+                  "# Shared pairings file (transitions DJs really play), https:// only, same format as\n"
+                  "# my-transitions.tsv. Empty = the Mix Pilot community file\n"
+                  "#   (github.com/christopheb38/mix-pilot-pairings); off = none.\n"
                   "pairings_url=\n",
                   f);
             fclose(f);
@@ -313,9 +319,10 @@ static void read_config(void)
         else if (strncmp(line, "pairings_url=", 13) == 0) snprintf(url, sizeof url, "%s", line + 13);
     }
     fclose(f);
+    const char *use = !url[0] ? DEFAULT_PAIRINGS_URL : !strcmp(url, "off") ? "" : url;
     pthread_mutex_lock(&g_net_mu);
     snprintf(g_cfg_key, sizeof g_cfg_key, "%s", g_deck_key[0] ? g_deck_key : key);
-    snprintf(g_cfg_url, sizeof g_cfg_url, "%s", url);
+    snprintf(g_cfg_url, sizeof g_cfg_url, "%s", use);
     pthread_mutex_unlock(&g_net_mu);
 }
 
@@ -547,6 +554,58 @@ static void diagnose(void)
 
 static atomic_int g_from_pdb;    /* 1 = the library came from export.pdb */
 
+/* The play histories on the stick, as transitions: consecutive entries of each history. */
+struct hist_entry {
+    uint32_t hist, index, track;
+};
+struct hist_buf {
+    struct hist_entry *v;
+    int n, cap;
+};
+
+static int pdb_on_history(uint32_t hist, uint32_t track, uint32_t index, void *u)
+{
+    struct hist_buf *h = u;
+    if (h->n == h->cap) {
+        int cap = h->cap ? h->cap * 2 : 1024;
+        if (cap > 200000) return 1;
+        struct hist_entry *v = realloc(h->v, sizeof *v * (size_t)cap);
+        if (!v) return 1;
+        h->v = v;
+        h->cap = cap;
+    }
+    h->v[h->n++] = (struct hist_entry){ hist, index, track };
+    return 0;
+}
+
+static int by_hist(const void *a, const void *b)
+{
+    const struct hist_entry *x = a, *y = b;
+    if (x->hist != y->hist) return x->hist < y->hist ? -1 : 1;
+    return x->index < y->index ? -1 : x->index > y->index;
+}
+
+/* Adds each A -> B the players recorded in a history as one played transition. */
+static int learn_history(nt_lib *L, int stick, const unsigned char *buf, size_t len)
+{
+    struct hist_buf h = { NULL, 0, 0 };
+    if (pdb_history(buf, len, pdb_on_history, &h) <= 0) {
+        free(h.v);
+        return 0;
+    }
+    qsort(h.v, (size_t)h.n, sizeof *h.v, by_hist);
+    int added = 0;
+    for (int i = 1; i < h.n; i++) {
+        if (h.v[i].hist != h.v[i - 1].hist) continue;
+        int a = nt_find(L, stick, h.v[i - 1].track, 0), b = nt_find(L, stick, h.v[i].track, 0);
+        if (a < 0 || b < 0 || L->t[a].ident == L->t[b].ident) continue;
+        nt_pair_add(&L->pairs, L->t[a].ident, L->t[b].ident, 1);
+        added++;
+    }
+    free(h.v);
+    return added;
+}
+
 struct pdb_ctx {
     nt_lib *L;
     int stick, plbase, npl, last;
@@ -647,9 +706,10 @@ static void load_pdb_sticks(nt_lib *L, int *plbase, int have[2])
             c->plbase = *plbase;
             c->last = -1;
             int before = L->n, n = pdb_read(buf, len, pdb_on_track, pdb_on_playlist, pdb_on_entry, c);
+            int hist = n > 0 && S(S_HISTORY) ? learn_history(L, stick, buf, len) : 0;
             free(buf);
-            tlog("USB %d: %s/rekordbox/export.pdb -> %d tracks (%d new), %d playlists", stick + 1, dirs[d], n,
-                 L->n - before, c->npl);
+            tlog("USB %d: %s/rekordbox/export.pdb -> %d tracks (%d new), %d playlists, %d history transitions",
+                 stick + 1, dirs[d], n, L->n - before, c->npl, hist);
             if (n > 0) {
                 *plbase += c->npl;
                 have[stick] = 1;
@@ -1577,6 +1637,7 @@ static void set_value(int i, int v)
     if (AZ_HAS(C, cfg_set)) C->cfg_set(MOD_ID, SET[i].key, v);
     atomic_store(&settings_changed, 1);
     atomic_store(&want_compute, 1);
+    if (i == S_HISTORY) atomic_store(&want_reload, 1);   /* the history pairs are added at load */
 }
 
 static int panel_input(const az_event *ev, void *user)
@@ -1603,7 +1664,7 @@ static int panel_input(const az_event *ev, void *user)
 
 /* The bottom of the browse list on the 1280x800 screen: the decks' info strip starts below it. */
 #ifndef BOTTOM_EDGE
-#define BOTTOM_EDGE 707   /* measured on deck photos: the decks' info strip starts here */
+#define BOTTOM_EDGE 701   /* measured on deck photos: a few pixels above the decks' info strip */
 #endif
 
 static void place_panel(void)

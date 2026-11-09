@@ -15,7 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { T_TRACKS = 0, T_GENRES = 1, T_ARTISTS = 2, T_ALBUMS = 3, T_KEYS = 5, T_PL_TREE = 7, T_PL_ENTRIES = 8 };
+enum { T_TRACKS = 0, T_GENRES = 1, T_ARTISTS = 2, T_ALBUMS = 3, T_KEYS = 5, T_PL_TREE = 7, T_PL_ENTRIES = 8,
+       T_HISTORY_ENTRIES = 12 };
 
 #define HEAP 0x28
 #define GROUP 0x24
@@ -288,14 +289,44 @@ static int on_entry_row(const unsigned char *r, size_t a, void *u)
     return 0;
 }
 
+static int pdb_open(pdb *P, const unsigned char *buf, size_t len)
+{
+    if (!buf || len < 0x1c) return -1;
+    *P = (pdb){ buf, len, rd32(buf + 4), rd32(buf + 8) };
+    if (rd32(buf) != 0 || P->plen < 512 || P->plen > 65536 || (P->plen & (P->plen - 1)) || len < 2 * (size_t)P->plen ||
+        P->ntables == 0 || P->ntables > 64 || 0x1c + 16 * (size_t)P->ntables > P->plen)
+        return -1;
+    return 0;
+}
+
+typedef struct {
+    pdb_entry_fn fn;
+    void *user;
+    int n;
+} hist_ctx;
+
+static int on_history_row(const unsigned char *r, size_t a, void *u)
+{
+    hist_ctx *h = u;
+    if (a < 12) return 0;
+    h->n++;
+    return h->fn ? h->fn(rd32(r + 4), rd32(r), rd32(r + 8), h->user) : 0;   /* track, history, index */
+}
+
+int pdb_history(const unsigned char *buf, size_t len, pdb_entry_fn fn, void *user)
+{
+    pdb P;
+    if (pdb_open(&P, buf, len)) return -1;
+    hist_ctx h = { fn, user, 0 };
+    each_row(&P, T_HISTORY_ENTRIES, on_history_row, &h);
+    return h.n;
+}
+
 int pdb_read(const unsigned char *buf, size_t len, pdb_track_fn on_track, pdb_playlist_fn on_playlist,
              pdb_entry_fn on_entry, void *user)
 {
-    if (!buf || len < 0x1c) return -1;
-    pdb P = { buf, len, rd32(buf + 4), rd32(buf + 8) };
-    if (rd32(buf) != 0 || P.plen < 512 || P.plen > 65536 || (P.plen & (P.plen - 1)) || len < 2 * (size_t)P.plen ||
-        P.ntables == 0 || P.ntables > 64 || 0x1c + 16 * (size_t)P.ntables > P.plen)
-        return -1;
+    pdb P;
+    if (pdb_open(&P, buf, len)) return -1;
     ctx c;
     memset(&c, 0, sizeof c);
     c.on_track = on_track;

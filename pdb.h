@@ -34,4 +34,8 @@ typedef int (*pdb_entry_fn)(uint32_t playlist, uint32_t track, uint32_t index, v
 int pdb_read(const unsigned char *buf, size_t len, pdb_track_fn on_track, pdb_playlist_fn on_playlist,
              pdb_entry_fn on_entry, void *user);
 
+/* The play histories the players wrote to the stick (HISTORY playlists): fn gets each entry,
+ * (history id, track id, position). Returns the number of entries, -1 when not an export.pdb. */
+int pdb_history(const unsigned char *buf, size_t len, pdb_entry_fn fn, void *user);
+
 #endif
