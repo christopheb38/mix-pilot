@@ -11,7 +11,7 @@ static const char *const LANG_NAMES[LANG_N] = { "English", "Francais", "Espanol"
 
 enum {
     T_SHOW, T_RELOAD, T_PANEL, T_MODE, T_COUNT, T_FLOW, T_REF, T_ARTIST, T_LEARN, T_ONLINE, T_LANG,
-    T_RIGHT, T_LEFT, T_HIDDEN, T_OFF, T_ON, T_NEXT, T_CHAIN, T_SMOOTH, T_UP, T_DOWN, T_AUTO, T_DECK,
+    T_RIGHT, T_LEFT, T_BOTTOM, T_HIDDEN, T_OFF, T_ON, T_NEXT, T_CHAIN, T_SMOOTH, T_UP, T_DOWN, T_AUTO, T_DECK,
     T_HDR_NEXT, T_HDR_CHAIN, T_READING, T_NOLIB, T_PLAY, T_NOTIN, T_AFTER, T_PLAN, T_MIXED, T_SIMILAR,
     T_IN, T_TRACKS, T_KNOWN, T_NET_KEY, T_NET_OFFLINE, T_NET_ON, T_NET_FAIL, T_NET_DISABLED, T_BANNER,
     T_LOVE, T_SUGG_TITLE, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT, T_D_HIDDEN, T_N
@@ -36,6 +36,7 @@ static const char *const TR[T_N][LANG_N] = {
     [T_LANG] = { "Language", "Langue", "Idioma", "Sprache", "Lingua" },
     [T_RIGHT] = { "Right", "Droite", "Derecha", "Rechts", "Destra" },
     [T_LEFT] = { "Left", "Gauche", "Izquierda", "Links", "Sinistra" },
+    [T_BOTTOM] = { "Bottom", "En bas", "Abajo", "Unten", "In basso" },
     [T_HIDDEN] = { "Hidden", "Masque", "Oculto", "Aus", "Nascosto" },
     [T_OFF] = { "Off", "Non", "No", "Aus", "No" },
     [T_ON] = { "On", "Oui", "Si", "An", "Si" },

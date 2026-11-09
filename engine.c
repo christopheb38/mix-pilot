@@ -443,6 +443,11 @@ int nt_tag_index(nt_lib *L, const char *tag)
     return L->ntags++;
 }
 
+int nt_curation(const nt_track *t)
+{
+    return t->npl * 8 + t->rating * 2 + (t->color ? 1 : 0);
+}
+
 void nt_set_genre(nt_lib *L, int i, const char *genre)
 {
     if (i < 0 || i >= L->n || !genre || !genre[0]) return;
@@ -598,16 +603,25 @@ static int rank_ex(const nt_lib *L, const nt_ctx *c, const uint8_t *ex, int from
         if (i == from || (ex && ex[i])) continue;
         float s = nt_score(L, c, from, from_bpm, i, &r);
         if (s <= 0) continue;
-        if (n == k && s <= why[k - 1].total) continue;
-        /* the same song twice (a duplicate in the library, or on both sticks): keep the better */
+        /* The same song twice (a duplicate in the library, or on both sticks): the copy you
+         * sorted wins (in playlists, stars, a color), then the better score. It takes the
+         * other copy's place in the list. */
         int dup = -1;
         for (int j = 0; j < n; j++)
             if (L->t[out[j]].ident == L->t[i].ident) { dup = j; break; }
         if (dup >= 0) {
-            if (why[dup].total >= s) continue;
-            for (int j = dup; j + 1 < n; j++) { out[j] = out[j + 1]; why[j] = why[j + 1]; }
-            n--;
+            int ci = nt_curation(&L->t[i]), cd = nt_curation(&L->t[out[dup]]);
+            if (ci < cd || (ci == cd && s <= why[dup].total)) continue;
+            r.total = s > why[dup].total ? s : why[dup].total;
+            out[dup] = i;
+            why[dup] = r;
+            for (int j = dup; j > 0 && why[j - 1].total < why[j].total; j--) {   /* keep the order */
+                int ti = out[j]; out[j] = out[j - 1]; out[j - 1] = ti;
+                nt_reason tr = why[j]; why[j] = why[j - 1]; why[j - 1] = tr;
+            }
+            continue;
         }
+        if (n == k && s <= why[k - 1].total) continue;
         insert_top(out, why, &n, k, i, &r);
     }
     return n;

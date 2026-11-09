@@ -256,6 +256,8 @@ static int on_track_row(const unsigned char *r, size_t a, void *u)
     t.key = names_get(&c->keys, rd32(r + 32));
     t.bpm = rd32(r + 56) / 100.0;
     t.len_s = rd16(r + 84);
+    t.color = r[88];
+    t.rating = r[89] <= 5 ? r[89] : 0;
     if (!t.id) return 0;
     c->ntracks++;
     if (c->on_track && c->on_track(&t, c->user)) { c->stop = 1; return 1; }

@@ -20,6 +20,8 @@ typedef struct pdb_track {
     const char *title, *artist, *album, *genre, *key;   /* UTF-8, "" when none; valid in the callback */
     double bpm;                           /* 0 when not analyzed */
     int len_s;
+    int rating;                           /* stars, 0..5 */
+    int color;                            /* rekordbox color, 0 none */
 } pdb_track;
 
 typedef int (*pdb_track_fn)(const pdb_track *t, void *user);                 /* nonzero stops */

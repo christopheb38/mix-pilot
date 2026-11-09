@@ -63,6 +63,7 @@ typedef struct nt_track {
     uint16_t tag[NT_TRACK_TAGS];            /* tag indexes */
     uint8_t tagw[NT_TRACK_TAGS];            /* tag weights 1..100 */
     uint16_t genre;                         /* rekordbox genre: tag index + 1, 0 none */
+    uint8_t rating, color;                  /* rekordbox stars (0..5) and color (0 none) */
 } nt_track;
 
 /* An open-addressing map from a pair of identities to a float (pair counts, similarity). */
@@ -97,6 +98,9 @@ const char *nt_str(const nt_lib *L, uint32_t off);
 int nt_tag_index(nt_lib *L, const char *tag);
 /* Sets track i's rekordbox genre (kept beside the web tags, which replace only each other). */
 void nt_set_genre(nt_lib *L, int i, const char *genre);
+/* How sorted a copy is (playlists, stars, color): of two copies of one song, the more sorted
+ * one is suggested. */
+int nt_curation(const nt_track *t);
 /* Sets the tags of every track with this identity (weights 1..100). */
 void nt_set_tags(nt_lib *L, uint32_t ident, const int *tag, const int *w, int n);
 /* Finds a track: by stick + id first, then by identity. -1 = not in the library. */

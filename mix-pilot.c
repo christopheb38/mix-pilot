@@ -67,7 +67,7 @@ static const struct {
     const char *key;
     int label, def, n;
 } SET[S_N] = {
-    { "panel", T_PANEL, 0, 3 }, { "mode", T_MODE, 0, 2 },     { "count", T_COUNT, 1, 4 },
+    { "panel", T_PANEL, 2, 4 }, { "mode", T_MODE, 0, 2 },     { "count", T_COUNT, 1, 4 },
     { "flow", T_FLOW, 0, 3 },   { "ref", T_REF, 0, 5 },       { "artist", T_ARTIST, 1, 2 },
     { "learn", T_LEARN, 1, 2 }, { "online", T_ONLINE, 1, 2 }, { "lang", T_LANG, 0, LANG_N },
 };
@@ -91,9 +91,9 @@ static const char *tr(int id)
 /* The label of value v of setting i, in the chosen language. */
 static void choice_text(int i, int v, char *buf, size_t n)
 {
-    static const int panel_t[] = { T_RIGHT, T_LEFT, T_HIDDEN };
+    static const int panel_t[] = { T_RIGHT, T_LEFT, T_BOTTOM, T_HIDDEN };
     switch (i) {
-    case S_PANEL: snprintf(buf, n, "%s", tr(panel_t[v % 3])); break;
+    case S_PANEL: snprintf(buf, n, "%s", tr(panel_t[v % 4])); break;
     case S_MODE: snprintf(buf, n, "%s", tr(v ? T_CHAIN : T_NEXT)); break;
     case S_COUNT: snprintf(buf, n, "%d", COUNTS[v & 3]); break;
     case S_FLOW: snprintf(buf, n, "%s", tr(FLOW_T[v % 3])); break;
@@ -543,7 +543,11 @@ static int pdb_on_track(const pdb_track *t, void *u)
 {
     struct pdb_ctx *c = u;
     int i = nt_lib_add(c->L, c->stick, t->id, t->title, t->artist, t->album, t->key, t->bpm, t->len_s);
-    if (i >= 0) nt_set_genre(c->L, i, t->genre);
+    if (i >= 0) {
+        nt_set_genre(c->L, i, t->genre);
+        c->L->t[i].rating = (uint8_t)t->rating;
+        c->L->t[i].color = (uint8_t)t->color;
+    }
     return c->L->n >= c->L->cap;
 }
 
@@ -1335,6 +1339,8 @@ static void to_ascii(const char *in, char *out, size_t n)
         "a", "a", "a", "a", "a", "a", "ae", "c", "e", "e", "e", "e", "i", "i", "i", "i",
         "d", "n", "o", "o", "o", "o", "o", "/", "o", "u", "u", "u", "u", "y", "th", "y",
     };
+    static const char *const c4[64] = { "A", "a", "A", "a", "A", "a", "C", "c", "C", "c", "C", "c", "C", "c", "D", "d", "D", "d", "E", "e", "E", "e", "E", "e", "E", "e", "E", "e", "G", "g", "G", "g", "G", "g", "G", "g", "H", "h", "H", "h", "I", "i", "I", "i", "I", "i", "I", "i", "I", "i", "IJ", "ij", "J", "j", "K", "k", "k", "L", "l", "L", "l", "L", "l", "L" };
+    static const char *const c5[64] = { "l", "L", "l", "N", "n", "N", "n", "N", "n", "n", "N", "n", "O", "o", "O", "o", "O", "o", "OE", "oe", "R", "r", "R", "r", "R", "r", "S", "s", "S", "s", "S", "s", "S", "s", "T", "t", "T", "t", "T", "t", "U", "u", "U", "u", "U", "u", "U", "u", "U", "u", "U", "u", "W", "w", "Y", "y", "Y", "Z", "z", "Z", "z", "Z", "z", "s" };
     size_t o = 0;
     const unsigned char *p = (const unsigned char *)in;
     while (*p && o + 4 < n) {
@@ -1346,7 +1352,13 @@ static void to_ascii(const char *in, char *out, size_t n)
         }
         if (*p == 0xC3 && (p[1] & 0xC0) == 0x80) { rep = c3[p[1] & 0x3F]; len = 2; }
         else if (*p == 0xC2 && (p[1] & 0xC0) == 0x80) { rep = p[1] == 0xA0 ? " " : ""; len = 2; }   /* nbsp, and drop the rest of C2 */
-        else if (*p == 0xC5 && (p[1] == 0x92 || p[1] == 0x93)) { rep = p[1] == 0x92 ? "OE" : "oe"; len = 2; }
+        else if ((*p == 0xC4 || *p == 0xC5) && (p[1] & 0xC0) == 0x80) {                          /* Latin Extended-A */
+            rep = (*p == 0xC4 ? c4 : c5)[p[1] & 0x3F];
+            len = 2;
+        } else if ((*p == 0xCC || (*p == 0xCD && p[1] < 0xB0)) && (p[1] & 0xC0) == 0x80) {
+            rep = "";                                    /* a combining accent (decomposed text, as macOS writes it) */
+            len = 2;
+        }
         else if (*p == 0xE2 && p[1] == 0x80 && (p[2] & 0xC0) == 0x80) {
             unsigned c = p[2];
             rep = (c == 0x98 || c == 0x99) ? "'" : (c == 0x9C || c == 0x9D) ? "\"" : (c == 0x93 || c == 0x94) ? "-"
@@ -1405,6 +1417,63 @@ static void draw_tabs(az_draw *d, int x, int y, int w, int h, int px)
     tabs_w = w;
 }
 
+/* The fold button, top right of the panel: a bar ("-") when open, a cross ("+") when folded.
+ * Its place is kept for taps (UI thread). */
+static int fold_x0 = -1, fold_y0, fold_sz;
+
+static void draw_fold(az_draw *d, int x, int y, int sz, int folded)
+{
+    const uint32_t fg = C->color(AZ_COL_TEXT), dim = C->color(AZ_COL_TEXT_DIM);
+    C->draw_rect(d, x, y, sz, sz, 1, dim);
+    int t = sz / 9 > 1 ? sz / 9 : 2, m = sz / 4;
+    C->fill_rect(d, x + m, y + (sz - t) / 2, sz - 2 * m, t, fg);
+    if (folded) C->fill_rect(d, x + (sz - t) / 2, y + m, t, sz - 2 * m, fg);
+    fold_x0 = x;
+    fold_y0 = y;
+    fold_sz = sz;
+}
+
+/* Bottom of the screen: one line per suggestion, across the whole width, so the track list
+ * above stays readable. Header: title, the "After ..." line, the energy tabs, the fold button. */
+static void draw_wide(az_draw *d, az_rect a)
+{
+    const uint32_t fg = C->color(AZ_COL_TEXT), dim = C->color(AZ_COL_TEXT_DIM), hi = C->color(AZ_COL_HI);
+    const int px = 16, small = 13, lh = 26, pad = 8, hdr = 30, f = S(S_FLOW) % 3;
+    pthread_mutex_lock(&g_view_mu);
+    C->fill_rect(d, a.x, a.y, a.w, 3, hi);
+    char h[64];
+    snprintf(h, sizeof h, "MIX PILOT - %s", tr(g_view.chain ? T_HDR_CHAIN : T_HDR_NEXT));
+    int hw = C->text_width(h, small) + 2 * pad, tabw = 330, btn = 22;
+    text(d, a.x + pad, a.y + 8, hw, h, small, hi);
+    int headx = a.x + pad + hw, headw = a.w - hw - tabw - btn - 5 * pad;
+    text(d, headx, a.y + 8, headw, g_view.head, small, fg);
+    draw_tabs(d, a.x + a.w - tabw - btn - 2 * pad, a.y + 5, tabw, hdr - 8, small);
+    draw_fold(d, a.x + a.w - btn - pad, a.y + 5, btn, 0);
+    int y = a.y + hdr + 2;
+    for (int i = 0; i < g_view.n[f] && y + lh <= a.y + a.h - 18; i++) {
+        const vrow *r = &g_view.r[f][i];
+        char num[8], line[240];
+        int x = a.x + pad;
+        C->fill_rect(d, x, y + 3, 5, lh - 6, score_color(r->score, r->known));
+        x += 5 + pad;
+        snprintf(num, sizeof num, "%d", i + 1);
+        C->draw_text(d, x, y + 2, num, px, dim);
+        x += C->text_width("10", px) + pad;
+        int titlew = (a.w * 44) / 100;
+        snprintf(line, sizeof line, "%s%s%s", r->title, r->artist[0] ? " - " : "", r->artist);
+        text(d, x, y + 2, titlew, line, px, fg);
+        x += titlew + pad;
+        C->draw_text(d, x, y + 4, r->meta, small, fg);
+        x += 96;
+        snprintf(line, sizeof line, "%s", r->why);
+        if (r->where[0]) snprintf(line + strlen(line), sizeof line - strlen(line), "   %s %s", tr(T_IN), r->where);
+        text(d, x, y + 4, a.x + a.w - pad - x, line, small, dim);
+        y += lh;
+    }
+    text(d, a.x + pad, a.y + a.h - 18, a.w - 2 * pad, g_view.status, 12, dim);
+    pthread_mutex_unlock(&g_view_mu);
+}
+
 /* The list, in area: used by both the panel and the Mod Menu page. */
 static void draw_list(az_draw *d, az_rect a, int px, int header)
 {
@@ -1416,7 +1485,9 @@ static void draw_list(az_draw *d, az_rect a, int px, int header)
         C->fill_rect(d, a.x, a.y, a.w, 3, hi);
         char h[64];
         snprintf(h, sizeof h, "MIX PILOT  -  %s", tr(g_view.chain ? T_HDR_CHAIN : T_HDR_NEXT));
-        text(d, a.x + pad, y + 6, a.w - 2 * pad, h, small, hi);
+        int btn = slh;
+        text(d, a.x + pad, y + 6, a.w - 3 * pad - btn, h, small, hi);
+        draw_fold(d, a.x + a.w - pad - btn, y + 5, btn, 0);
         y += 6 + slh;
     }
     text(d, a.x + pad, y, a.w - 2 * pad, g_view.head, small, fg);
@@ -1448,19 +1519,22 @@ static void draw_list(az_draw *d, az_rect a, int px, int header)
 static void panel_paint(az_draw *d, az_rect a, void *user)
 {
     (void)user;
-    if (panel_small) {
+    if (panel_small) {                                    /* folded: one line and the "+" button */
         const uint32_t hi = C->color(AZ_COL_HI);
         C->fill_rect(d, a.x, a.y, a.w, 3, hi);
         pthread_mutex_lock(&g_view_mu);
         char s[200];
         int f = S(S_FLOW) % 3;
-        snprintf(s, sizeof s, "MIX PILOT  %s", g_view.n[f] ? g_view.r[f][0].title : "");
+        snprintf(s, sizeof s, "MIX PILOT  1. %s", g_view.n[f] ? g_view.r[f][0].title : "");
         pthread_mutex_unlock(&g_view_mu);
-        text(d, a.x + 8, a.y + 8, a.w - 16, s, 15, C->color(AZ_COL_TEXT));
+        int btn = a.h - 14 > 14 ? a.h - 14 : 14;
+        text(d, a.x + 8, a.y + 9, a.w - 24 - btn, s, 15, C->color(AZ_COL_TEXT));
+        draw_fold(d, a.x + a.w - 8 - btn, a.y + 7, btn, 1);
         tabs_y0 = -1;
         return;
     }
-    draw_list(d, a, 18, 1);
+    if (S(S_PANEL) == 2) draw_wide(d, a);
+    else draw_list(d, a, 18, 1);
 }
 
 /* A setting changed on the UI thread: store it, save it, rescore, re-place the panel. */
@@ -1478,7 +1552,12 @@ static int panel_input(const az_event *ev, void *user)
 {
     (void)user;
     if (ev->kind == AZ_EV_TAP) {
-        if (tabs_y0 >= 0 && ev->y >= tabs_y0 && ev->y < tabs_y0 + tabs_h && tabs_w > 0) {
+        int slop = 8;                                     /* a fingertip: a little around the button */
+        if (fold_x0 >= 0 && ev->x >= fold_x0 - slop && ev->x < fold_x0 + fold_sz + slop && ev->y >= fold_y0 - slop &&
+            ev->y < fold_y0 + fold_sz + slop) {
+            panel_small = !panel_small;                   /* the "-" / "+" button: fold or unfold */
+            atomic_store(&settings_changed, 1);
+        } else if (tabs_y0 >= 0 && ev->y >= tabs_y0 && ev->y < tabs_y0 + tabs_h && tabs_w > 0) {
             int f = (ev->x - tabs_x0) * 3 / tabs_w;     /* a tab: that energy */
             if (f >= 0 && f < 3) set_value(S_FLOW, f);
         } else {
@@ -1486,7 +1565,7 @@ static int panel_input(const az_event *ev, void *user)
         }
         return 1;
     }
-    if (ev->kind == AZ_EV_LONG) {                         /* long press: fold / unfold */
+    if (ev->kind == AZ_EV_LONG) {                         /* long press: fold / unfold too */
         panel_small = !panel_small;
         atomic_store(&settings_changed, 1);
         return 1;
@@ -1494,18 +1573,29 @@ static int panel_input(const az_event *ev, void *user)
     return 0;
 }
 
+/* The bottom of the browse list on the 1280x800 screen: the decks' info strip starts below it. */
+#ifndef BOTTOM_EDGE
+#define BOTTOM_EDGE 640
+#endif
+
 static void place_panel(void)
 {
     if (!panel) return;
-    int where = S(S_PANEL);                           /* 0 right, 1 left, 2 off */
-    if (where == 2) {
+    int where = S(S_PANEL);                           /* 0 right, 1 left, 2 bottom, 3 hidden */
+    if (where == 3) {
         C->surface_show(panel, 0);
         return;
     }
     int k = COUNTS[S(S_COUNT) & 3];
-    int w = 470, h = panel_small ? 40 : 6 + 22 + 26 + 36 + k * (27 + 21 + 4) + 26;
-    if (h > 700) h = 700;
-    az_rect r = { where == 1 ? 10 : 1280 - w - 10, 90, w, h };
+    az_rect r;
+    if (where == 2) {                                 /* above the decks' info strip */
+        int h = panel_small ? 36 : 32 + k * 26 + 20;
+        r = (az_rect){ 10, BOTTOM_EDGE - h, 1260, h };
+    } else {
+        int w = 470, h = panel_small ? 40 : 6 + 22 + 26 + 36 + k * (27 + 21 + 4) + 26;
+        if (h > 700) h = 700;
+        r = (az_rect){ where == 1 ? 10 : 1280 - w - 10, 90, w, h };
+    }
     C->surface_place(panel, r);
     C->surface_show(panel, 1);
     C->surface_redraw(panel);

@@ -45,6 +45,11 @@ bon, jaune = correct, orange = possible, **bleu = enchaînement déjà joué**),
 Les morceaux chargés sur les autres decks et ceux déjà joués ce soir
 ne sont jamais proposés.
 
+**Doublons.** Un même morceau présent deux fois dans la bibliothèque n'est proposé qu'une fois :
+celui que tu as **trié** (rangé dans des playlists, noté en étoiles, coloré), sinon celui qui
+s'enchaîne le mieux. Rien n'est jamais supprimé ni modifié sur la clé : Mix Pilot lit la
+bibliothèque sans y écrire.
+
 ### Les enchaînements « connus »
 
 C'est l'idée de Pulse DJ (des millions d'enchaînements joués en soirée), à l'échelle d'un deck :
@@ -152,7 +157,7 @@ pour choisir une ligne, clique (ou touche-la) pour changer sa valeur, BACK pour 
 | Ligne | Effet |
 |---|---|
 | Show suggestions | la liste en plein écran (clic : Next / Chain) |
-| Panel | Right / Left / Off. Appui long sur le panneau : le replier |
+| Panel | En bas (par défaut : une ligne par suggestion, sur toute la largeur, au-dessus des infos des decks) / Droite / Gauche / Masqué. Le bouton « – » en haut à droite replie le panneau sur une ligne, « + » le rouvre |
 | Mode | Next tracks / Chain |
 | Tracks shown | 4, 5, 8, 10 |
 | Energy | l'onglet affiché : Smooth / Build up / Cool down |

@@ -134,6 +134,15 @@ static void ranking(void)
     int copies = 0;
     for (int i = 0; i < n; i++) copies += L.t[out[i]].ident == L.t[good].ident;
     CHECK(copies == 1);
+    /* ...and it is the copy you sorted: in a playlist, with stars */
+    L.t[twin].rating = 4;
+    nt_lib_in_playlist(&L, twin, 1, "Peak");
+    n = nt_rank(&L, &c, a, 0, 5, out, why);
+    int shown = -1;
+    for (int i = 0; i < n; i++)
+        if (L.t[out[i]].ident == L.t[good].ident) shown = out[i];
+    CHECK(shown == twin);
+    for (int i = 1; i < n; i++) CHECK(why[i - 1].total >= why[i].total);
 
     /* excluded tracks never come back */
     uint8_t ex[100] = { 0 };

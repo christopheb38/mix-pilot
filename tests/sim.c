@@ -45,7 +45,7 @@ static const struct t LIB[] = {
     { 23, "Glow", "Chi", "C", 123, 1 },               { 24, "Pulse", "Psi", "Dm", 122, 1 },
     { 25, "Ride", "Omega", "F#m", 122, 2 },           { 26, "Heat", "Alpha2", "Bbm", 128, 2 },
     { 27, "Calm", "Beta2", "E", 100, 3 },             { 28, "Spin", "Gamma2", "Am", 123, 1 },
-    { 29, "Drift", "Delta2", "Em", 121, 1 },          { 30, "Ending", "Eps2", "Am", 122, 1 },
+    { 29, "Drift", "Delta2", "Em", 121, 1 },          { 30, "Ending Che\xcc\x81rie \xc5\x81", "Eps2", "Am", 122, 1 },
 };
 #define NLIB ((int)(sizeof LIB / sizeof LIB[0]))
 
@@ -168,7 +168,7 @@ static void no_accents(void)
 static void paint(void)
 {
     nscreen = 0;
-    az_rect a = { 800, 90, 470, 600 };
+    az_rect a = { 10, 458, 1260, 182 };                   /* the bottom panel, 5 tracks (place_panel) */
     surf.on_paint(NULL, a, surf.user);
     no_accents();
 }
@@ -262,14 +262,15 @@ int main(void)
     CHECK(!screen_has("Fast Lane"));                       /* 150 BPM */
     CHECK(screen_has("Deep House"));                       /* "in <playlist>" */
     CHECK(screen_has("Loop Ete - Phil"));                  /* accents folded for the deck's font */
+    CHECK(screen_has("Ending Cherie L - Eps2"));           /* decomposed accent (macOS) and Latin Extended-A */
     CHECK(screen_has("Smooth") && screen_has("Build up") && screen_has("Cool down"));   /* the tabs */
     char smooth_first[200] = "", up_first[200] = "";
     for (int i = 0; i < nscreen; i++)
         if (!strcmp(screen_text[i], "1") && i + 1 < nscreen) { snprintf(smooth_first, sizeof smooth_first, "%s", screen_text[i + 1]); break; }
-    /* tap the middle tab (Build up): header 6+21, "After" line 21+4, then the 29 px tab bar */
+    /* tap the middle tab (Build up): the tabs sit in the header, right of the "After" line */
     int tapped = 0;
     {
-        az_event t = { AZ_EV_TAP, 0, 800 + 235, 90 + 27 + 25 + 10 };
+        az_event t = { AZ_EV_TAP, 0, 10 + 1260 - 330 - 22 - 16 + 165, 458 + 12 };
         surf.on_input(&t, surf.user);
         run(0.5);
         paint();
@@ -279,6 +280,19 @@ int main(void)
     }
     printf("  smooth #1: %s   build up #1: %s\n", smooth_first, up_first);
     CHECK(tapped);                                         /* Build up shows another first track */
+
+    /* the fold button, top right: one tap folds the panel to a line, another opens it */
+    az_event fold = { AZ_EV_TAP, 0, 10 + 1260 - 8 - 11, 458 + 16 };
+    surf.on_input(&fold, surf.user);
+    run(0.3);
+    nscreen = 0;
+    surf.on_paint(NULL, (az_rect){ 10, 604, 1260, 36 }, surf.user);
+    CHECK(screen_has("MIX PILOT  1. ") && !screen_has("Cool down"));
+    az_event unfold = { AZ_EV_TAP, 0, 10 + 1260 - 8 - 11, 604 + 18 };
+    surf.on_input(&unfold, surf.user);
+    run(0.3);
+    paint();
+    CHECK(screen_has("Cool down") && screen_has("Loop Ete"));
 
     /* deck 2 mixes in, deck 1 stops: Opening Groove -> Second Wind is learned */
     pthread_mutex_lock(&mu);
