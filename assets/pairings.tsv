@@ -1,0 +1,5 @@
+# Mix Pilot community pairings: transitions DJs play, one per line.
+# fromArtist <TAB> fromTitle <TAB> toArtist <TAB> toTitle [<TAB> count [<TAB> when]]
+# Lines starting with # are ignored. Titles are matched loosely ("(Original Mix)", "feat." and
+# accents do not matter; a named remix does). my-transitions.tsv in the mod's data folder uses
+# the same format, so you can share yours by adding its lines here or to a pairings_url file.
