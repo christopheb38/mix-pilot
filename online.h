@@ -20,6 +20,8 @@ int net_available(void);
 int net_get(const char *url, char **body, size_t *len, size_t max, int timeout_s);
 /* The last failure in a few words ("curl 60 SSL ...", "HTTP 503", "error 10 Invalid API key"). */
 const char *net_last_error(void);
+/* POST len bytes of body to an https:// URL. Returns the HTTP status (200 = ok) or -1. */
+int net_post(const char *url, const char *body, size_t len, int timeout_s);
 /* Percent-encodes s into out (RFC 3986 unreserved kept). */
 void net_escape(const char *s, char *out, size_t n);
 

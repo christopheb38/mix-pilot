@@ -200,9 +200,11 @@ All settings are on the Mix Pilot page (**Mod Menu > Mix Pilot**) and are kept b
 | **Avoid same artist** | On, Off | On |
 | **Learn my transitions** | On, Off | On |
 | **Learn from rekordbox history** | On, Off: also count the transitions in the play histories saved on the stick (see below) | Off |
+| **Share automatically** | On, Off: send your new transitions to the community file by themselves when online (see below) | Off |
 | **Online (Last.fm)** | On, Off (Off: no network access at all) | On |
 | **Language** | English, Francais, Espanol, Deutsch, Italiano | English |
 | **Last.fm key** | your API key, typed on a 0-9 / a-f keypad | none |
+| **Share my transitions** | sends your new transitions to the community file, after asking; the row shows how many are new | |
 | **Reload library** | reads the library, `config.txt` and the pairings files again; the row shows `reading...`, then `OK - <number of tracks>` | |
 
 <br>
@@ -280,12 +282,18 @@ Mix Pilot can tell you that "everybody plays B after A". It gets that from four 
 
 ### Share your transitions with everybody
 
-The more DJs share, the better the suggestions get for all. Your transitions are in
-`MODS/community-mods/mix-pilot/data/my-transitions.tsv` on your stick:
+The more DJs share, the better the suggestions get for all.
 
-- open a **pull request** on [mix-pilot-pairings](https://github.com/christopheb38/mix-pilot-pairings)
-  that adds your lines to `pairings.tsv` (an automatic check validates the format), or
-- open an **issue** there titled *My transitions* and attach the file: it will be merged for you.
+**From the deck:** **Mod Menu > Mix Pilot > Share my transitions**. The row shows how many
+transitions are new; the deck asks before it sends anything, then sends them over WiFi. Turn
+on **Share automatically** to send new ones by themselves while the deck is online (at most
+about every 10 minutes, so a gig's transitions go together). Each transition is sent once.
+Shared transitions are checked and merged into the community file every night.
+
+**From a computer:** your transitions are in `MODS/community-mods/mix-pilot/data/my-transitions.tsv`
+on your stick. Open a **pull request** on [mix-pilot-pairings](https://github.com/christopheb38/mix-pilot-pairings)
+that adds your lines to `pairings.tsv`, or an **issue** there titled *My transitions* with the
+file attached.
 
 ### The format
 
@@ -300,6 +308,9 @@ matched loosely: `(Original Mix)`, `(Extended Mix)`, `feat. X`, case and accents
 but a named remix (`(Fisher Remix)`) is a different track.
 
 ### Another file, or none
+
+`share_url` in `config.txt` chooses where **Share my transitions** sends: empty uses the
+community relay, `off` never sends.
 
 `pairings_url` in `config.txt` chooses the shared file: empty uses the community file, an
 `https://` address uses yours (for example your crew's own list), `off` uses none. Then choose
@@ -360,6 +371,7 @@ created by AZ-MODS, kept when the mod is updated, and deleted when the mod is re
 | `my-transitions.tsv` | the transitions you played (pairings format, one line each): share it! |
 | `community.tsv` | the community pairings file (or your `pairings_url`), as last downloaded |
 | `lastfm-cache.tsv` | Last.fm answers, so they are not asked twice (reset past 8 MB) |
+| `shared.pos` | how much of `my-transitions.tsv` was already shared (so nothing is sent twice) |
 
 All of these are plain text: you can open, edit, back up or delete them on a computer.
 
@@ -370,12 +382,17 @@ All of these are plain text: you can open, edit, back up or delete them on a com
 - Mix Pilot uses the network **only** with **Online (Last.fm)** on, and only for:
   - **Last.fm** (`ws.audioscrobbler.com`): the artist and title of tracks, and your API key;
   - the **community pairings file** on GitHub (`raw.githubusercontent.com`), or the
-    `pairings_url` you set in `config.txt` (`off` for none).
+    `pairings_url` you set in `config.txt` (`off` for none);
+  - **only if you share**: your transitions (artist and title pairs, no date, no deck ID) to the
+    community relay, when you press **Share my transitions** (after a confirmation) or with
+    **Share automatically** turned on. The relay is described in
+    [mix-pilot-pairings/relay](https://github.com/christopheb38/mix-pilot-pairings/tree/main/relay).
 - Everything goes over **HTTPS**, through the deck's own libcurl, outside the audio path, with
   timeouts and size limits. If the network is down, Mix Pilot waits and tries again later; the
   suggestions keep working offline.
-- Nothing about your sets is sent anywhere. Your transitions stay in `my-transitions.tsv` on
-  your stick unless you share that file yourself.
+- Nothing about your sets is sent unless you choose to share it. Your transitions stay in
+  `my-transitions.tsv` on your stick until you press **Share my transitions** or turn on
+  **Share automatically**; neither is on by default.
 
 <br>
 

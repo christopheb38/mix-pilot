@@ -10,12 +10,14 @@ enum { LANG_EN = 0, LANG_FR, LANG_ES, LANG_DE, LANG_IT, LANG_N };
 static const char *const LANG_NAMES[LANG_N] = { "English", "Francais", "Espanol", "Deutsch", "Italiano" };
 
 enum {
-    T_SHOW, T_RELOAD, T_PANEL, T_MODE, T_COUNT, T_FLOW, T_REF, T_ARTIST, T_LEARN, T_HISTORY, T_ONLINE, T_LANG,
+    T_SHOW, T_RELOAD, T_PANEL, T_MODE, T_COUNT, T_FLOW, T_REF, T_ARTIST, T_LEARN, T_HISTORY, T_SHARE_AUTO, T_ONLINE, T_LANG,
     T_RIGHT, T_LEFT, T_BOTTOM, T_HIDDEN, T_OFF, T_ON, T_NEXT, T_CHAIN, T_SMOOTH, T_UP, T_DOWN, T_AUTO, T_DECK,
     T_HDR_NEXT, T_HDR_CHAIN, T_READING, T_NOLIB, T_PLAY, T_NOTIN, T_AFTER, T_PLAN, T_MIXED, T_SIMILAR,
     T_IN, T_TRACKS, T_KNOWN, T_NET_KEY, T_NET_OFFLINE, T_NET_ON, T_NET_FAIL, T_NET_BADKEY, T_NET_DISABLED, T_BANNER,
     T_LOVE, T_SUGG_TITLE, T_D_NOUSB, T_D_PDB, T_D_HUB, T_D_REFUSED, T_D_NOEXPORT, T_D_HIDDEN, T_KEY, T_KEY_NONE, T_KEY_HINT,
-    T_KEY_BAD, T_DEL, T_CLEAR, T_OK, T_CANCEL, T_RELOADING, T_N
+    T_KEY_BAD, T_DEL, T_CLEAR, T_OK, T_CANCEL, T_RELOADING, T_SHARE, T_SHARE_PENDING, T_SHARE_NONE,
+    T_SHARE_SENDING, T_SHARE_DONE, T_SHARE_FAIL, T_SHARE_OFF, T_SHARE_HINT, T_SHARE_Q_TITLE, T_SHARE_Q,
+    T_SHARE_YES, T_N
 };
 
 /* Plain ASCII only: the deck's font draws no accented letters (boxes or wrong glyphs). */
@@ -123,6 +125,30 @@ static const char *const TR[T_N][LANG_N] = {
     [T_OK] = { "OK", "OK", "OK", "OK", "OK" },
     [T_CANCEL] = { "Cancel", "Annuler", "Cancelar", "Abbrechen", "Annulla" },
     [T_RELOADING] = { "reading...", "lecture...", "leyendo...", "liest...", "lettura..." },
+    [T_SHARE_AUTO] = { "Share automatically", "Partage automatique", "Compartir automaticamente",
+                       "Automatisch teilen", "Condivisione automatica" },
+    [T_SHARE] = { "Share my transitions", "Partager mes enchainements", "Compartir mis transiciones",
+                  "Meine Uebergaenge teilen", "Condividi i miei passaggi" },
+    [T_SHARE_PENDING] = { "%d to share", "%d a partager", "%d por compartir", "%d zu teilen", "%d da condividere" },
+    [T_SHARE_NONE] = { "nothing new", "rien de nouveau", "nada nuevo", "nichts Neues", "niente di nuovo" },
+    [T_SHARE_SENDING] = { "sending...", "envoi...", "enviando...", "sendet...", "invio..." },
+    [T_SHARE_DONE] = { "sent, thanks!", "envoye, merci !", "enviado, gracias!", "gesendet, danke!", "inviato, grazie!" },
+    [T_SHARE_FAIL] = { "failed, retry later", "echec, reessaie plus tard", "fallo, reintenta luego",
+                       "Fehler, spaeter erneut", "errore, riprova piu tardi" },
+    [T_SHARE_OFF] = { "not available yet", "pas encore disponible", "aun no disponible", "noch nicht verfuegbar",
+                      "non ancora disponibile" },
+    [T_SHARE_HINT] = { "Your transitions: %d - share them to improve everyone's suggestions",
+                       "Tes enchainements : %d - partage-les pour ameliorer les suggestions de tous",
+                       "Tus transiciones: %d - compartelas para mejorar las sugerencias de todos",
+                       "Deine Uebergaenge: %d - teile sie fuer bessere Vorschlaege fuer alle",
+                       "I tuoi passaggi: %d - condividili per migliorare i suggerimenti di tutti" },
+    [T_SHARE_Q_TITLE] = { "Share?", "Partager ?", "Compartir?", "Teilen?", "Condividere?" },
+    [T_SHARE_Q] = { "Send %d transitions to the Mix Pilot community? Only track names are sent, no date and no deck ID.",
+                    "Envoyer %d enchainements a la communaute Mix Pilot ? Seuls les noms des morceaux partent, sans date ni identifiant.",
+                    "Enviar %d transiciones a la comunidad Mix Pilot? Solo se envian los nombres de los temas, sin fecha ni identificador.",
+                    "%d Uebergaenge an die Mix-Pilot-Community senden? Nur Tracknamen, ohne Datum und ohne Geraete-ID.",
+                    "Inviare %d passaggi alla community Mix Pilot? Solo i nomi dei brani, senza data ne identificativo." },
+    [T_SHARE_YES] = { "Share", "Partager", "Compartir", "Teilen", "Condividi" },
 };
 
 #endif

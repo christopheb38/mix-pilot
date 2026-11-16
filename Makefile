@@ -115,7 +115,7 @@ engine-test:
 	    -o $(OUT)/engine_test tests/engine_test.c engine.c minijson.c pdb.c online.c -lm -ldl -lpthread
 	$(OUT)/engine_test
 
-SIM_FLAGS := -DMP_OFFLINE -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
+SIM_FLAGS := -DMP_OFFLINE -DMP_FAKE_POST='"/tmp/mixpilot-fake/posted.txt"' -DSETTLE_S=1.5 -DREF_STABLE_S=0.3 -DLIB_RETRY_S=1.0 \
     -DMP_MOUNTS='"/tmp/mixpilot-fake/mounts"' -DMP_MEDIA='"/tmp/mixpilot-fake/media/usb"' \
     -DMP_SYSBLOCK='"/tmp/mixpilot-fake/sys/class/block"'
 

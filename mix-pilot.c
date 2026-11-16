@@ -64,14 +64,15 @@ static const az_core_v1 *C;
 
 #include "i18n.h"
 
-enum { S_PANEL, S_MODE, S_COUNT, S_FLOW, S_REF, S_ARTIST, S_LEARN, S_HISTORY, S_ONLINE, S_LANG, S_N };
+enum { S_PANEL, S_MODE, S_COUNT, S_FLOW, S_REF, S_ARTIST, S_LEARN, S_HISTORY, S_SHARE, S_ONLINE, S_LANG, S_N };
 static const struct {
     const char *key;
     int label, def, n;
 } SET[S_N] = {
     { "panel", T_PANEL, 2, 4 }, { "mode", T_MODE, 0, 2 },     { "count", T_COUNT, 1, 4 },
     { "flow", T_FLOW, 0, 3 },   { "ref", T_REF, 0, 5 },       { "artist", T_ARTIST, 1, 2 },
-    { "learn", T_LEARN, 1, 2 }, { "history", T_HISTORY, 0, 2 }, { "online", T_ONLINE, 1, 2 },
+    { "learn", T_LEARN, 1, 2 }, { "history", T_HISTORY, 0, 2 }, { "share", T_SHARE_AUTO, 0, 2 },
+    { "online", T_ONLINE, 1, 2 },
     { "lang", T_LANG, 0, LANG_N },
 };
 static atomic_int g_set[S_N];
@@ -187,6 +188,16 @@ static void net_failed(int r)
     atomic_store(&net_state, r == LFM_BADKEY ? 5 : 4);
 }
 static atomic_int community_pending = 1;
+
+/* Sharing the transitions you played with the community (opt-in): what my-transitions.tsv
+ * holds, how much of it was not sent yet (the byte offset already sent is in shared.pos), and
+ * the share button's state. The relay's address comes from the community file's header
+ * ("# share: https://...") or share_url= in config.txt ("off" = never). */
+enum { SH_IDLE = 0, SH_SENDING, SH_DONE, SH_FAILED, SH_UNAVAILABLE, SH_NOTHING };
+static atomic_int g_share_state, share_requested, share_recount = 1;
+static atomic_int g_my_total, g_my_pending;
+static char g_share_cfg[256];    /* share_url= from config.txt: "", "off" or an address (under g_net_mu) */
+static char g_share_header[256]; /* "# share:" from the community file (under g_net_mu) */
 
 /* ---- small helpers --------------------------------------------------------------------- */
 
@@ -306,7 +317,11 @@ static void read_config(void)
                   "# Shared pairings file (transitions DJs really play), https:// only, same format as\n"
                   "# my-transitions.tsv. Empty = the Mix Pilot community file\n"
                   "#   (github.com/christopheb38/mix-pilot-pairings); off = none.\n"
-                  "pairings_url=\n",
+                  "pairings_url=\n"
+                  "#\n"
+                  "# Where Share my transitions sends (https:// only). Empty = the Mix Pilot\n"
+                  "# community relay; off = never send.\n"
+                  "share_url=\n",
                   f);
             fclose(f);
         }
@@ -317,6 +332,11 @@ static void read_config(void)
         chomp(line);
         if (strncmp(line, "lastfm_api_key=", 15) == 0) snprintf(key, sizeof key, "%s", line + 15);
         else if (strncmp(line, "pairings_url=", 13) == 0) snprintf(url, sizeof url, "%s", line + 13);
+        else if (strncmp(line, "share_url=", 10) == 0) {
+            pthread_mutex_lock(&g_net_mu);
+            snprintf(g_share_cfg, sizeof g_share_cfg, "%s", line + 10);
+            pthread_mutex_unlock(&g_net_mu);
+        }
     }
     fclose(f);
     const char *use = !url[0] ? DEFAULT_PAIRINGS_URL : !strcmp(url, "off") ? "" : url;
@@ -324,6 +344,35 @@ static void read_config(void)
     snprintf(g_cfg_key, sizeof g_cfg_key, "%s", g_deck_key[0] ? g_deck_key : key);
     snprintf(g_cfg_url, sizeof g_cfg_url, "%s", use);
     pthread_mutex_unlock(&g_net_mu);
+}
+
+/* A track with no artist tag often has "Artist - Title" as its title: split it. */
+static void split_artist(char *artist, size_t an, char *title, size_t tn)
+{
+    char *d = artist[0] ? NULL : strstr(title, " - ");
+    if (!d) return;
+    *d = '\0';
+    snprintf(artist, an, "%s", title);
+    memmove(title, d + 3, strlen(d + 3) + 1);
+    (void)tn;
+}
+
+/* The relay address announced by a pairings file: a "# share: https://..." line. */
+static void read_share_header(const char *path)
+{
+    FILE *f = fopen(path, "re");
+    if (!f) return;
+    char line[400];
+    for (int n = 0; n < 40 && fgets(line, sizeof line, f); n++) {
+        chomp(line);
+        if (strncmp(line, "# share: https://", 17) == 0) {
+            pthread_mutex_lock(&g_net_mu);
+            snprintf(g_share_header, sizeof g_share_header, "%s", line + 9);
+            pthread_mutex_unlock(&g_net_mu);
+            break;
+        }
+    }
+    fclose(f);
 }
 
 /* "fromArtist \t fromTitle \t toArtist \t toTitle [\t count [\t when]]", '#' = comment. */
@@ -760,6 +809,7 @@ static int build_library(nt_lib *L)
     if (dir) {
         path_in(p, sizeof p, dir, "community.tsv");
         load_pairings(L, p, 1.0f);
+        read_share_header(p);
         path_in(p, sizeof p, dir, "my-transitions.tsv");
         load_pairings(L, p, 1.0f);
         path_in(p, sizeof p, dir, "lastfm-cache.tsv");
@@ -962,6 +1012,8 @@ static void take_learning(void)
     g_nlearn = 0;
     pthread_mutex_unlock(&g_in_mu);
     for (int i = 0; i < n; i++) {
+        split_artist(ev[i].fa, sizeof ev[i].fa, ev[i].ft, sizeof ev[i].ft);
+        split_artist(ev[i].ta, sizeof ev[i].ta, ev[i].tt, sizeof ev[i].tt);
         char line[700], when[32] = "";
         time_t t = time(NULL);
         struct tm tm;
@@ -972,7 +1024,141 @@ static void take_learning(void)
         nt_pair_add(&g_lib.pairs, nt_ident(ev[i].fa, ev[i].ft), nt_ident(ev[i].ta, ev[i].tt), 1);
         pthread_mutex_unlock(&g_lib_mu);
     }
-    if (n) atomic_store(&want_compute, 1);
+    if (n) {
+        atomic_store(&want_compute, 1);
+        atomic_store(&share_recount, 1);
+    }
+}
+
+/* ---- sharing (worker counts, net thread sends) ------------------------------------------ */
+
+static long read_shared_pos(const char *dir)
+{
+    char p[512], buf[32] = "";
+    path_in(p, sizeof p, dir, "shared.pos");
+    FILE *f = fopen(p, "re");
+    if (!f) return 0;
+    if (!fgets(buf, sizeof buf, f)) buf[0] = '\0';
+    fclose(f);
+    long v = atol(buf);
+    return v > 0 ? v : 0;
+}
+
+/* Worker: how many transitions my-transitions.tsv holds, and how many are not shared yet. */
+static void count_shareable(void)
+{
+    const char *dir = data_dir();
+    int total = 0, pending = 0;
+    if (dir) {
+        char p[512], line[1024];
+        path_in(p, sizeof p, dir, "my-transitions.tsv");
+        long pos = read_shared_pos(dir);
+        FILE *f = fopen(p, "re");
+        if (f) {
+            long at = 0;
+            while (fgets(line, sizeof line, f)) {
+                long len = (long)strlen(line);
+                int complete = len && line[len - 1] == '\n';
+                if (complete && line[0] != '#' && strchr(line, '\t')) {
+                    total++;
+                    if (at >= pos) pending++;
+                }
+                at += len;
+            }
+            fclose(f);
+        }
+    }
+    atomic_store(&g_my_total, total);
+    atomic_store(&g_my_pending, pending);
+}
+
+/* Net thread: send what was not shared yet, as "artist  title  artist  title  1" lines (no
+ * date). The offset reached is saved only once the relay accepted them. */
+static void share_now(void)
+{
+    char url[256];
+    pthread_mutex_lock(&g_net_mu);
+    if (!strcmp(g_share_cfg, "off")) url[0] = '\0';
+    else snprintf(url, sizeof url, "%s", g_share_cfg[0] ? g_share_cfg : g_share_header);
+    pthread_mutex_unlock(&g_net_mu);
+    if (strncmp(url, "https://", 8) != 0) {
+        atomic_store(&g_share_state, SH_UNAVAILABLE);
+        return;
+    }
+    const char *dir = data_dir();
+    if (!dir) {
+        atomic_store(&g_share_state, SH_FAILED);
+        return;
+    }
+    char p[512], line[1024];
+    path_in(p, sizeof p, dir, "my-transitions.tsv");
+    long pos = read_shared_pos(dir), at = 0, end = pos;
+    FILE *f = fopen(p, "re");
+    size_t cap = 64 * 1024, n = 0;
+    char *body = malloc(cap);
+    int lines = 0;
+    if (f && body) {
+        while (fgets(line, sizeof line, f)) {
+            long len = (long)strlen(line);
+            at += len;
+            if (!len || line[len - 1] != '\n') break;      /* a line being written: next time */
+            if (at <= pos) continue;
+            end = at;
+            if (line[0] == '#') continue;
+            chomp(line);
+            char *fl[6];
+            int k = split_tabs(line, fl, 6);
+            if (k < 4) continue;
+            char a1[200], t1[200], a2[200], t2[200];
+            snprintf(a1, sizeof a1, "%s", fl[0]);
+            snprintf(t1, sizeof t1, "%s", fl[1]);
+            snprintf(a2, sizeof a2, "%s", fl[2]);
+            snprintf(t2, sizeof t2, "%s", fl[3]);
+            split_artist(a1, sizeof a1, t1, sizeof t1);
+            split_artist(a2, sizeof a2, t2, sizeof t2);
+            int w = snprintf(body + n, cap - n, "%s\t%s\t%s\t%s\t1\n", a1, t1, a2, t2);
+            if (w < 0 || (size_t)w >= cap - n) {          /* full: the rest goes next time */
+                end = at - len;
+                break;
+            }
+            n += (size_t)w;
+            if (++lines >= 300) break;
+        }
+    }
+    if (f) fclose(f);
+    if (!lines) {
+        free(body);
+        if (end > pos) {                                  /* only comments: skip them */
+            char q[520];
+            path_in(p, sizeof p, dir, "shared.pos");
+            snprintf(q, sizeof q, "%s.tmp", p);
+            FILE *o = fopen(q, "we");
+            if (o) { fprintf(o, "%ld\n", end); fclose(o); rename(q, p); }
+        }
+        atomic_store(&g_share_state, SH_NOTHING);
+        atomic_store(&share_recount, 1);
+        return;
+    }
+    int code = net_post(url, body, n, 20);
+    free(body);
+    if (code != 200) {
+        atomic_store(&g_share_state, SH_FAILED);
+        tlog("share: %d transitions refused or not sent (%d %s)", lines, code, net_last_error());
+        return;
+    }
+    char q[520];
+    path_in(p, sizeof p, dir, "shared.pos");
+    snprintf(q, sizeof q, "%s.tmp", p);
+    FILE *o = fopen(q, "we");
+    if (o) {
+        int ok = fprintf(o, "%ld\n", end) > 0;
+        ok = fclose(o) == 0 && ok;
+        if (ok) rename(q, p);
+        else remove(q);
+    }
+    tlog("share: %d transitions sent", lines);
+    atomic_store(&g_share_state, SH_DONE);
+    atomic_store(&share_recount, 1);
 }
 
 static void *worker(void *arg)
@@ -1008,6 +1194,10 @@ static void *worker(void *arg)
             atomic_store(&want_compute, 1);
         }
         take_learning();
+        if (atomic_exchange(&share_recount, 0)) {
+            count_shareable();
+            atomic_store(&view_fresh, 1);
+        }
         if (atomic_exchange(&want_compute, 0)) compute();
         nap_ms(120);
     }
@@ -1166,15 +1356,31 @@ static void fetch_community(const char *url)
     free(body);
 }
 
+/* Net thread: a nap that ends early when the share button is pressed, so it answers at once. */
+static void net_wait(int ms)
+{
+    for (int t = 0; t < ms && !atomic_load(&share_requested); t += 100) nap_ms(100);
+}
+
 static void *net_thread(void *arg)
 {
     (void)arg;
     int backoff = 0;                                      /* naps of 500 ms left before trying again */
     char last_key[64] = "";
+    int share_wait = 200;                                 /* loop passes before the next automatic share */
     for (;;) {
         if (!S(S_ONLINE)) {
-            nap_ms(1000);
+            net_wait(1000);
             continue;
+        }
+        /* Share: when asked (the button), or automatically when on and something is new, at
+         * most about every 10 minutes, so one gig's transitions go together. */
+        if (share_wait > 0) share_wait--;
+        if (atomic_exchange(&share_requested, 0) ||
+            (S(S_SHARE) && share_wait == 0 && atomic_load(&g_my_pending) > 0)) {
+            atomic_store(&g_share_state, SH_SENDING);
+            share_now();
+            share_wait = 2000;
         }
         char key[64], url[256];
         pthread_mutex_lock(&g_net_mu);
@@ -1188,18 +1394,18 @@ static void *net_thread(void *arg)
         }
         if (net_available() != 0) {
             if (atomic_exchange(&net_state, 2) != 2) atomic_store(&want_compute, 1);
-            nap_ms(5000);
+            net_wait(5000);
             continue;
         }
         if (url[0] && atomic_exchange(&community_pending, 0)) fetch_community(url);
         if (!key[0]) {
             if (atomic_exchange(&net_state, 1) != 1) atomic_store(&want_compute, 1);
-            nap_ms(2000);
+            net_wait(2000);
             continue;
         }
         if (backoff > 0) {
             backoff--;
-            nap_ms(500);
+            net_wait(500);
             continue;
         }
         struct net_job j;
@@ -1213,7 +1419,7 @@ static void *net_thread(void *arg)
         }
         pthread_mutex_unlock(&g_net_mu);
         if (!have) {
-            nap_ms(300);
+            net_wait(300);
             continue;
         }
         int before = atomic_load(&net_state);
@@ -1692,7 +1898,7 @@ static void place_panel(void)
 
 /* ---- the Mix Pilot page: settings, the suggestions, credits --------------------------- */
 
-enum { IT_SUGGEST = 0, IT_FIRST_SET = 1, IT_KEY = IT_FIRST_SET + S_N, IT_RELOAD, IT_N };
+enum { IT_SUGGEST = 0, IT_FIRST_SET = 1, IT_KEY = IT_FIRST_SET + S_N, IT_SHARE, IT_RELOAD, IT_N };
 static int page_sel, page_top, page_list;       /* UI thread only; page_list = showing the suggestions */
 static int page_y0, page_row, page_lines;       /* where page_draw put the rows, for taps */
 
@@ -1713,6 +1919,15 @@ static void item_text(int it, char *label, size_t ln, char *value, size_t vn)
         int st = atomic_load(&g_reload_state);
         if (st == 1) snprintf(value, vn, "%s", tr(T_RELOADING));
         else if (st == 2) snprintf(value, vn, "OK - %d", atomic_load(&g_reload_count));
+    } else if (it == IT_SHARE) {
+        snprintf(label, ln, "%s", tr(T_SHARE));
+        int st = atomic_load(&g_share_state), pend = atomic_load(&g_my_pending);
+        if (st == SH_SENDING) snprintf(value, vn, "%s", tr(T_SHARE_SENDING));
+        else if (st == SH_DONE && !pend) snprintf(value, vn, "%s", tr(T_SHARE_DONE));
+        else if (st == SH_FAILED) snprintf(value, vn, "%s", tr(T_SHARE_FAIL));
+        else if (st == SH_UNAVAILABLE) snprintf(value, vn, "%s", tr(T_SHARE_OFF));
+        else if (pend > 0) snprintf(value, vn, tr(T_SHARE_PENDING), pend);
+        else snprintf(value, vn, "%s", tr(T_SHARE_NONE));
     } else if (it == IT_KEY) {
         snprintf(label, ln, "%s", tr(T_KEY));
         char k[64];
@@ -1846,8 +2061,12 @@ static int key_input(const az_event *ev)
 static void draw_credits(az_draw *d, az_rect a, int px)
 {
     const int lh = px * 3 / 2, pad = px;
-    int y = a.y + a.h - 2 * lh - pad / 2;
+    int y = a.y + a.h - 3 * lh - pad / 2;
     C->fill_rect(d, a.x + pad, y - pad / 2, a.w - 2 * pad, 1, C->color(AZ_COL_TEXT_DIM));
+    char hint[200];                                       /* the reminder to share */
+    snprintf(hint, sizeof hint, tr(T_SHARE_HINT), atomic_load(&g_my_total));
+    text(d, a.x + pad, y, a.w - 2 * pad, hint, px, C->color(AZ_COL_TEXT_DIM));
+    y += lh;
     text(d, a.x + pad, y, a.w - 2 * pad, tr(T_LOVE), px, C->color(AZ_COL_TEXT));
     text(d, a.x + pad, y + lh, a.w - 2 * pad, "@blinkevents38    @christopheb_38", px, C->color(AZ_COL_HI));
 }
@@ -1870,7 +2089,7 @@ static void page_draw(az_draw *d, az_rect area, void *user)
         return;
     }
     const int small = px * 4 / 5 > 10 ? px * 4 / 5 : 10;
-    int credits_h = 2 * (small * 3 / 2) + small * 2;
+    int credits_h = 3 * (small * 3 / 2) + small * 2;
     int lines = (a.h - credits_h) / row;
     if (lines < 1) lines = 1;
     if (page_sel < page_top) page_top = page_sel;
@@ -1891,6 +2110,29 @@ static void page_draw(az_draw *d, az_rect area, void *user)
     draw_credits(d, a, small);
 }
 
+/* The share button: say what will be sent, and send only on Yes. */
+static void share_answer(int yes, void *user)
+{
+    (void)user;
+    if (!yes) return;
+    atomic_store(&g_share_state, SH_SENDING);
+    atomic_store(&share_requested, 1);
+    C->request_redraw();
+}
+
+static void share_ask(void)
+{
+    int pend = atomic_load(&g_my_pending);
+    if (pend <= 0) {
+        atomic_store(&g_share_state, SH_NOTHING);
+        return;
+    }
+    char q[300];
+    snprintf(q, sizeof q, tr(T_SHARE_Q), pend);
+    if (!AZ_HAS(C, confirm) || C->confirm(MOD_ID, tr(T_SHARE_Q_TITLE), q, tr(T_SHARE_YES), share_answer, NULL) != 0)
+        atomic_store(&g_share_state, SH_IDLE);            /* another question is open: try again */
+}
+
 static void activate(int it, int dir)
 {
     if (it == IT_SUGGEST) {
@@ -1900,6 +2142,8 @@ static void activate(int it, int dir)
         reload_now();
     } else if (it == IT_KEY) {
         key_open();
+    } else if (it == IT_SHARE) {
+        share_ask();
     } else {
         int i = it - IT_FIRST_SET;
         set_value(i, (S(i) + (dir < 0 ? SET[i].n - 1 : 1)) % SET[i].n);

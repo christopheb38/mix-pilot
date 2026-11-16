@@ -150,6 +150,16 @@ static void logf_(const char *id, const char *fmt, ...)
 }
 static void banner(const char *id, const char *t, int ms) { (void)id; (void)t; (void)ms; }
 static int register_screen(const char *id, const az_screen_v1 *s) { (void)id; (void)s; return 0; }
+static int confirm_asked;
+static char confirm_text[400];
+static int confirm(const char *id, const char *title, const char *text, const char *yes, void (*fn)(int, void *), void *user)
+{
+    (void)id; (void)title; (void)yes;
+    confirm_asked++;
+    snprintf(confirm_text, sizeof confirm_text, "%s", text);
+    fn(1, user);                                          /* the DJ says Yes */
+    return 0;
+}
 static int thread_start(const char *id, const char *name, void *(*fn)(void *), void *arg)
 {
     (void)id; (void)name;
@@ -222,6 +232,10 @@ int main(void)
     make_fake_stick();
     snprintf(dir, sizeof dir, "/tmp/mixpilot-sim-%d", (int)getpid());
     mkdir(dir, 0755);
+    char cfgp[300];                                       /* the relay address, as config.txt sets it */
+    snprintf(cfgp, sizeof cfgp, "%s/config.txt", dir);
+    FILE *cf = fopen(cfgp, "w");
+    if (cf) { fputs("lastfm_api_key=\npairings_url=off\nshare_url=https://relay.test/submit\n", cf); fclose(cf); }
     CORE = (az_core_v1){ .abi = AZ_MOD_ABI, .size = sizeof(az_core_v1), .log = logf_, .register_screen = register_screen,
                          .draw_header = draw_header, .draw_text = draw_text, .fill_rect = fill_rect, .draw_rect = draw_rect, .color = color,
                          .row_height = row_height, .text_width = text_width, .request_redraw = request_redraw,
@@ -230,7 +244,8 @@ int main(void)
                          .lib_playlists = lib_playlists, .lib_tracks = lib_tracks, .view = view,
                          .surface_create = surface_create, .surface_place = surface_place,
                          .surface_show = surface_show, .surface_redraw = surface_redraw, .deck_info = deck_info,
-                         .on_deck_event = on_deck_event, .banner = banner, .thread_start = thread_start };
+                         .on_deck_event = on_deck_event, .banner = banner, .thread_start = thread_start,
+                         .confirm = confirm };
     const az_mod_v1 *m = az_mod_v1_entry();
     CHECK(m->init(&CORE) == 0);
     CHECK(nrows == 1 && row_screen != NULL);            /* one row in the Mod Menu, opening our page */
@@ -333,10 +348,10 @@ int main(void)
     dump("chain after Opening Groove (deck 2)");
     CHECK(screen_has("Plan after D2: Opening Groove"));
 
-    /* the page: turn to Language (item 10: suggestions, then 9 settings before it), click -> Francais */
+    /* the page: turn to Language (item 11: suggestions, then 10 settings before it), click -> Francais */
     az_event knob = { AZ_EV_KNOB, 1, 0, 0 }, click = { AZ_EV_CLICK, 0, 0, 0 };
     row_screen->on_enter(row_screen->user);
-    for (int i = 0; i < 10; i++) row_screen->on_input(&knob, row_screen->user);
+    for (int i = 0; i < 11; i++) row_screen->on_input(&knob, row_screen->user);
     row_screen->on_input(&click, row_screen->user);
     run(1.0);
     nscreen = 0;
@@ -363,14 +378,11 @@ int main(void)
         if (pf) { fwrite(g.b, 1, g.len, pf); fclose(pf); }
         free(g.b);
         __atomic_store_n(&lib_ready, 0, __ATOMIC_RELEASE);
-        az_event back2 = { AZ_EV_KNOB, -1, 0, 0 };          /* Language -> Online -> rekordbox history: on */
-        row_screen->on_input(&back2, row_screen->user);
-        row_screen->on_input(&back2, row_screen->user);
+        az_event back2 = { AZ_EV_KNOB, -1, 0, 0 };          /* Language -> Online -> Share auto -> history: on */
+        for (int i = 0; i < 3; i++) row_screen->on_input(&back2, row_screen->user);
         row_screen->on_input(&click, row_screen->user);
-        row_screen->on_input(&knob, row_screen->user);
-        row_screen->on_input(&knob, row_screen->user);
-        row_screen->on_input(&knob, row_screen->user);    /* Language -> Last.fm key -> Reload library */
-        row_screen->on_input(&knob, row_screen->user);
+        /* history -> share auto -> online -> language -> Last.fm key -> Share -> Reload library */
+        for (int i = 0; i < 6; i++) row_screen->on_input(&knob, row_screen->user);
         row_screen->on_input(&click, row_screen->user);
         run(2.5);
         paint();
@@ -382,9 +394,10 @@ int main(void)
         CHECK(screen_has("OK - 20"));                      /* the Reload row says it is done */
     }
 
-    /* the Last.fm key typed on the deck: back one row to it, open the pad, 32 presses, OK */
+    /* the Last.fm key typed on the deck: back two rows to it, open the pad, 32 presses, OK */
     {
         az_event up = { AZ_EV_KNOB, -1, 0, 0 };
+        row_screen->on_input(&up, row_screen->user);
         row_screen->on_input(&up, row_screen->user);
         row_screen->on_input(&click, row_screen->user);    /* opens the pad */
         nscreen = 0;
@@ -398,6 +411,34 @@ int main(void)
         nscreen = 0;
         row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
         CHECK(screen_has("Chiave Last.fm") && screen_has("0000...00"));
+        no_accents();
+    }
+
+    /* sharing: the reminder counts the 2 transitions learned; Share (one row down) asks, then
+     * sends them without dates to the relay (a file here); a second press has nothing new */
+    {
+        CHECK(screen_has("I tuoi passaggi: 2") && screen_has("2 da condividere"));
+        row_screen->on_input(&knob, row_screen->user);    /* Last.fm key -> Share my transitions */
+        row_screen->on_input(&click, row_screen->user);   /* asks; the fake dialog says Yes */
+        CHECK(confirm_asked == 1 && strstr(confirm_text, "2 passaggi"));
+        run(1.5);
+        nscreen = 0;
+        row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+        CHECK(screen_has("inviato, grazie!"));
+        char sent[2048] = "";
+        FILE *pf = fopen(FAKE "/posted.txt", "r");
+        size_t got = pf ? fread(sent, 1, sizeof sent - 1, pf) : 0;
+        if (pf) fclose(pf);
+        sent[got] = '\0';
+        printf("  shared:\n%s", sent);
+        int nl = 0;
+        for (char *c = sent; *c; c++) nl += *c == '\n';
+        CHECK(nl == 2 && strstr(sent, "Alpha\tOpening Groove\tBeta\tSecond Wind\t1\n") && !strstr(sent, "20"));
+        row_screen->on_input(&click, row_screen->user);   /* nothing new: no question, nothing sent */
+        run(1.0);
+        nscreen = 0;
+        row_screen->on_draw(NULL, (az_rect){ 0, 0, 1280, 800 }, row_screen->user);
+        CHECK(confirm_asked == 1 && screen_has("niente di nuovo"));
         no_accents();
     }
 

@@ -22,6 +22,8 @@ typedef const char *(*easy_strerror_fn)(int);
 typedef int (*global_init_fn)(long);
 
 #define O_WRITEDATA 10001
+#define O_POSTFIELDS 10015
+#define O_POSTFIELDSIZE 60
 #define O_URL 10002
 #define O_USERAGENT 10018
 #define O_WRITEFUNCTION 20011
@@ -147,6 +149,47 @@ int net_get(const char *url, char **body, size_t *len, size_t max, int timeout_s
     *body = s.b;
     if (len) *len = s.n;
     return (int)code;
+}
+
+int net_post(const char *url, const char *body, size_t len, int timeout_s)
+{
+#ifdef MP_FAKE_POST
+    (void)timeout_s;                                      /* tests: the body goes to a file */
+    if (!url || strncmp(url, "https://", 8) != 0) return -1;
+    FILE *f = fopen(MP_FAKE_POST, "ae");
+    if (!f) return -1;
+    fwrite(body, 1, len, f);
+    fclose(f);
+    return 200;
+#else
+    if (!url || strncmp(url, "https://", 8) != 0 || !body) return -1;
+    if (net_available() != 0) return -1;
+    CURL *c = cu.init();
+    if (!c) return -1;
+    sink s = { NULL, 0, 0, 64 * 1024, 0 };                /* the answer is small: keep it, then drop it */
+    cu.setopt(c, O_URL, url);
+    cu.setopt(c, O_USERAGENT, "MixPilot/1.1 (XDJ-AZ community mod)");
+    cu.setopt(c, O_POSTFIELDS, body);
+    cu.setopt(c, O_POSTFIELDSIZE, (long)len);
+    cu.setopt(c, O_WRITEFUNCTION, on_data);
+    cu.setopt(c, O_WRITEDATA, &s);
+    cu.setopt(c, O_NOSIGNAL, 1L);
+    cu.setopt(c, O_CONNECTTIMEOUT, 6L);
+    cu.setopt(c, O_TIMEOUT, (long)timeout_s);
+    cu.setopt(c, O_PROTOCOLS, PROTO_HTTPS);
+    cu.setopt(c, O_REDIR_PROTOCOLS, PROTO_HTTPS);
+    int rc = cu.perform(c);
+    long code = 0;
+    cu.getinfo(c, I_RESPONSE_CODE, &code);
+    cu.cleanup(c);
+    free(s.b);
+    if (rc != 0) {
+        snprintf(g_last_err, sizeof g_last_err, "curl %d %s", rc, cu.strerror_ ? cu.strerror_(rc) : "");
+        return -1;
+    }
+    if (code != 200) snprintf(g_last_err, sizeof g_last_err, "HTTP %ld", code);
+    return (int)code;
+#endif
 }
 
 void net_escape(const char *s, char *out, size_t n)
